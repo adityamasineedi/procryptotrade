@@ -1,6 +1,6 @@
 """
 ProTradeAI Pro+ Telegram Notifier
-Advanced alert system with rich formatting and retry logic
+Advanced alert system with rich formatting and retry logic (IST timezone)
 """
 
 import requests
@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 import json
+import pytz
 
 from config import *
 
@@ -22,7 +23,25 @@ class TelegramNotifier:
         self.chat_id = TELEGRAM_CONFIG['chat_id']
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
         self.alert_count = 0
+        self.timezone = pytz.timezone('Asia/Kolkata')  # IST timezone
         
+    def format_ist_time(self, timestamp: datetime) -> str:
+        """Format timestamp to IST"""
+        if timestamp.tzinfo is None:
+            # If no timezone info, assume it's UTC and convert to IST
+            timestamp = pytz.UTC.localize(timestamp)
+        
+        ist_time = timestamp.astimezone(self.timezone)
+        return ist_time.strftime('%H:%M:%S IST')
+    
+    def format_ist_datetime(self, timestamp: datetime) -> str:
+        """Format full datetime to IST"""
+        if timestamp.tzinfo is None:
+            timestamp = pytz.UTC.localize(timestamp)
+        
+        ist_time = timestamp.astimezone(self.timezone)
+        return ist_time.strftime('%Y-%m-%d %H:%M:%S IST')
+    
     def send_message(self, message: str, parse_mode: str = 'HTML') -> bool:
         """Send message to Telegram with retry logic"""
         if not self.bot_token or not self.chat_id:
@@ -107,7 +126,7 @@ class TelegramNotifier:
 📍 Volume: {signal.get('volume_ratio', 0):.2f}x avg
 
 ⏰ <b>TIMING</b>
-🕐 Signal Time: {signal['timestamp'].strftime('%H:%M:%S UTC')}
+🕐 Signal Time: {self.format_ist_time(signal['timestamp'])}
 ⏳ Hold Period: ~{signal.get('hold_hours', 4)} hours
 💼 Risk per Trade: {RISK_PER_TRADE*100:.1f}% (${risk_amount:.2f})
 
@@ -136,7 +155,7 @@ class TelegramNotifier:
 
 💰 Entry: ${signal['current_price']:.4f}
 🛡️ SL: ${signal.get('sl_price', 0):.4f} | TP: ${signal.get('tp_price', 0):.4f}
-⏰ {signal['timestamp'].strftime('%H:%M')} | Risk: {RISK_PER_TRADE*100:.1f}%
+⏰ {self.format_ist_time(signal['timestamp'])} | Risk: {RISK_PER_TRADE*100:.1f}%
 
 <i>ProTradeAI Pro+ | Manual Execution</i>
             """.strip()
@@ -155,7 +174,7 @@ class TelegramNotifier:
 Confidence: {signal['confidence']:.1f}%
 Leverage: {signal['leverage']}x
 Entry: ${signal['current_price']:.4f}
-Time: {signal['timestamp'].strftime('%H:%M:%S')}
+Time: {self.format_ist_time(signal['timestamp'])}
         """.strip()
     
     def _get_confidence_emoji(self, confidence: float) -> str:
@@ -202,6 +221,9 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
             
             avg_confidence = sum(s['confidence'] for s in signals) / total_signals if signals else 0
             
+            # Get current IST date
+            current_ist = datetime.now(self.timezone)
+            
             message = f"""
 📊 <b>Daily Trading Summary</b>
 
@@ -223,7 +245,7 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
                 direction_emoji = "🚀" if signal['signal_type'] == 'LONG' else "📉"
                 message += f"\n{i}. {direction_emoji} {signal['symbol']} {signal['confidence']:.1f}%"
             
-            message += f"\n\n🤖 <b>ProTradeAI Pro+ | {datetime.now().strftime('%Y-%m-%d')}</b>"
+            message += f"\n\n🤖 <b>ProTradeAI Pro+ | {current_ist.strftime('%d %b %Y')} IST</b>"
             
             return self.send_message(message)
             
@@ -249,6 +271,10 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
 🔸 Success Rate: {status.get('success_rate', 0):.1f}%
 🔸 Model Accuracy: {status.get('model_accuracy', 0):.1f}%
 
+🌙 <b>Schedule Info</b>
+🔸 Shutdown Period: {'Yes' if status.get('is_shutdown_period', False) else 'No'}
+🔸 Next Resume: {status.get('next_resume_time', 'N/A')}
+
 🤖 <b>ProTradeAI Pro+ Monitor</b>
             """.strip()
             
@@ -261,11 +287,14 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
     def test_connection(self) -> bool:
         """Test Telegram connection"""
         try:
+            current_ist = datetime.now(self.timezone)
+            
             test_message = f"""
 🧪 <b>Test Message</b>
 
 ✅ ProTradeAI Pro+ connection successful!
-🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🕐 Time: {self.format_ist_datetime(current_ist)}
+🌏 Timezone: Indian Standard Time (IST)
 🤖 Bot is ready to send trading signals
 
 <i>This is a test message - you can ignore it.</i>
@@ -280,12 +309,14 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
     def send_error_alert(self, error_msg: str, component: str = "System") -> bool:
         """Send error alert"""
         try:
+            current_ist = datetime.now(self.timezone)
+            
             message = f"""
 🚨 <b>Error Alert</b>
 
 ❌ <b>Component:</b> {component}
 ⚠️ <b>Error:</b> {error_msg}
-🕐 <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+🕐 <b>Time:</b> {self.format_ist_time(current_ist)}
 
 🔧 Please check system logs for details.
 
@@ -303,7 +334,8 @@ Time: {signal['timestamp'].strftime('%H:%M:%S')}
         return {
             'total_alerts_sent': self.alert_count,
             'bot_configured': bool(self.bot_token and self.chat_id),
-            'last_message_time': datetime.now()
+            'last_message_time': datetime.now(self.timezone),
+            'timezone': 'Asia/Kolkata (IST)'
         }
 
 # Global notifier instance

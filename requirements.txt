@@ -20,6 +20,9 @@ APScheduler==3.10.4
 # Environment & Configuration
 python-dotenv==1.0.1
 
+# Timezone Support (NEW)
+pytz==2024.1
+
 # Logging & Utilities
 colorlog==6.8.2
 

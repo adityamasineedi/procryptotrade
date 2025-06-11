@@ -1,6 +1,6 @@
 """
 ProTradeAI Pro+ Main Application
-Scheduler and orchestrator for the trading bot
+Scheduler and orchestrator for the trading bot with auto shutdown
 """
 
 import os
@@ -13,6 +13,7 @@ from typing import List, Dict
 import threading
 import json
 from pathlib import Path
+import pytz
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -44,10 +45,14 @@ class ProTradeAIBot:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
         self.is_running = False
+        self.is_shutdown_period = False
         self.start_time = datetime.now()
         self.signals_today = []
         self.daily_stats = {}
         self.last_health_check = datetime.now()
+        
+        # Timezone for shutdown schedule (IST)
+        self.timezone = pytz.timezone('Asia/Kolkata')
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -62,6 +67,67 @@ class ProTradeAIBot:
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.stop()
         sys.exit(0)
+    
+    def is_shutdown_time(self) -> bool:
+        """Check if current time is in shutdown period (1 AM - 5 AM IST)"""
+        try:
+            current_time = datetime.now(self.timezone)
+            current_hour = current_time.hour
+            
+            # Shutdown between 1 AM and 5 AM IST
+            return 1 <= current_hour < 5
+            
+        except Exception as e:
+            logger.error(f"Error checking shutdown time: {e}")
+            return False
+    
+    def check_shutdown_status(self):
+        """Check and handle shutdown/resume based on time"""
+        try:
+            should_shutdown = self.is_shutdown_time()
+            
+            if should_shutdown and not self.is_shutdown_period:
+                # Enter shutdown period
+                logger.info("🌙 Entering maintenance shutdown period (1-5 AM IST)")
+                self.is_shutdown_period = True
+                
+                # Pause trading-related jobs but keep system monitoring
+                for job in self.scheduler.get_jobs():
+                    if job.id in ['signal_scan', 'quick_scan']:
+                        job.pause()
+                        logger.info(f"Paused job: {job.id}")
+                
+                # Send shutdown notification
+                telegram_notifier.send_message(
+                    "🌙 <b>Maintenance Period Started</b>\n\n"
+                    "🔸 Signal scanning paused (1-5 AM IST)\n"
+                    "🔸 System monitoring continues\n"
+                    "🔸 Bot will resume automatically at 5 AM IST\n\n"
+                    "<i>Good night! 😴</i>"
+                )
+                
+            elif not should_shutdown and self.is_shutdown_period:
+                # Exit shutdown period
+                logger.info("☀️ Exiting maintenance shutdown period")
+                self.is_shutdown_period = False
+                
+                # Resume trading-related jobs
+                for job in self.scheduler.get_jobs():
+                    if job.id in ['signal_scan', 'quick_scan']:
+                        job.resume()
+                        logger.info(f"Resumed job: {job.id}")
+                
+                # Send resume notification
+                telegram_notifier.send_message(
+                    "☀️ <b>Trading Resumed</b>\n\n"
+                    "✅ Signal scanning reactivated\n"
+                    "🔸 All systems operational\n"
+                    "🔸 Ready for new trading opportunities\n\n"
+                    "<i>Good morning! Let's trade! 🚀</i>"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in shutdown status check: {e}")
     
     def validate_configuration(self) -> bool:
         """Validate all configuration settings"""
@@ -88,49 +154,84 @@ class ProTradeAIBot:
         logger.info("Configuration validation successful")
         return True
     
-    def scan_and_signal(self):
-        """Main scanning and signal generation function"""
+    def quick_market_scan(self):
+        """Quick market scan (every 5 minutes during active hours)"""
         try:
-            logger.info("Starting signal scan...")
+            if self.is_shutdown_period:
+                logger.info("Skipping quick scan - in shutdown period")
+                return
             
-            # Get signals from AI strategy
+            logger.info("Starting quick market scan...")
+            
+            # Quick scan of top 3 symbols only
+            quick_symbols = SYMBOLS[:3]  # BTC, ETH, BNB
+            signals = []
+            
+            for symbol in quick_symbols:
+                for timeframe in ['1h', '4h']:  # Only check shorter timeframes
+                    signal = strategy_ai.predict_signal(symbol, timeframe)
+                    if signal:
+                        signals.append(signal)
+            
+            if signals:
+                logger.info(f"Quick scan generated {len(signals)} signals")
+                for signal in signals:
+                    self.process_signal(signal)
+            else:
+                logger.info("Quick scan: No signals generated")
+                
+        except Exception as e:
+            logger.error(f"Error in quick market scan: {e}")
+    
+    def full_market_scan(self):
+        """Full market scan (every 15 minutes during active hours)"""
+        try:
+            if self.is_shutdown_period:
+                logger.info("Skipping full scan - in shutdown period")
+                return
+            
+            logger.info("Starting full market scan...")
+            
+            # Get signals from AI strategy (all symbols and timeframes)
             signals = strategy_ai.scan_all_symbols()
             
             if not signals:
-                logger.info("No signals generated this cycle")
+                logger.info("Full scan: No signals generated")
                 return
             
-            logger.info(f"Generated {len(signals)} signals")
+            logger.info(f"Full scan generated {len(signals)} signals")
             
-            # Send each signal
+            # Process each signal
             for signal in signals:
-                try:
-                    # Add to daily tracking
-                    self.signals_today.append(signal)
-                    
-                    # Send telegram alert
-                    success = telegram_notifier.send_signal_alert(signal)
-                    
-                    if success:
-                        logger.info(f"Signal sent: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
-                        
-                        # Save signal to file
-                        self._save_signal(signal)
-                    else:
-                        logger.error(f"Failed to send signal: {signal['symbol']}")
-                    
-                    # Small delay between signals
-                    time.sleep(2)
-                    
-                except Exception as e:
-                    logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
+                self.process_signal(signal)
+                time.sleep(2)  # Small delay between signals
             
             # Update daily stats
             self._update_daily_stats()
             
         except Exception as e:
-            logger.error(f"Error in scan_and_signal: {e}")
-            telegram_notifier.send_error_alert(str(e), "Signal Scanner")
+            logger.error(f"Error in full market scan: {e}")
+            telegram_notifier.send_error_alert(str(e), "Full Market Scanner")
+    
+    def process_signal(self, signal: Dict):
+        """Process and send a trading signal"""
+        try:
+            # Add to daily tracking
+            self.signals_today.append(signal)
+            
+            # Send telegram alert
+            success = telegram_notifier.send_signal_alert(signal)
+            
+            if success:
+                logger.info(f"Signal sent: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
+                
+                # Save signal to file
+                self._save_signal(signal)
+            else:
+                logger.error(f"Failed to send signal: {signal['symbol']}")
+                
+        except Exception as e:
+            logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
     
     def health_check(self):
         """System health check"""
@@ -151,13 +252,15 @@ class ProTradeAIBot:
             
             status = {
                 'healthy': True,
-                'status': 'Running',
+                'status': 'Shutdown Period' if self.is_shutdown_period else 'Running',
                 'uptime': f"{uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m",
                 'last_signal_time': max([s['timestamp'] for s in self.signals_today], default=datetime.min).strftime('%H:%M:%S') if self.signals_today else 'Never',
                 'signals_today': len(self.signals_today),
                 'signals_last_hour': len(signals_last_hour),
                 'success_rate': success_rate,
-                'model_accuracy': 78.5  # Dummy value
+                'model_accuracy': 78.5,  # Dummy value
+                'is_shutdown_period': self.is_shutdown_period,
+                'next_resume_time': '05:00 IST' if self.is_shutdown_period else 'N/A'
             }
             
             # Send status update if it's been more than 6 hours
@@ -264,13 +367,15 @@ class ProTradeAIBot:
         """Get current bot status"""
         return {
             'is_running': self.is_running,
+            'is_shutdown_period': self.is_shutdown_period,
             'start_time': self.start_time.isoformat(),
             'uptime_seconds': (datetime.now() - self.start_time).total_seconds(),
             'signals_today': len(self.signals_today),
             'last_health_check': self.last_health_check.isoformat(),
             'daily_stats': self.daily_stats,
             'scheduler_jobs': len(self.scheduler.get_jobs()),
-            'next_scan': self.scheduler.get_job('signal_scan').next_run_time.isoformat() if self.scheduler.get_job('signal_scan') else None
+            'next_quick_scan': self.scheduler.get_job('quick_scan').next_run_time.isoformat() if self.scheduler.get_job('quick_scan') else None,
+            'next_full_scan': self.scheduler.get_job('full_scan').next_run_time.isoformat() if self.scheduler.get_job('full_scan') else None
         }
     
     def start(self):
@@ -286,20 +391,40 @@ class ProTradeAIBot:
             # Setup scheduler jobs
             logger.info("Setting up scheduler...")
             
-            # Main signal scanning (every 15 minutes)
+            # Quick market scan (every 5 minutes)
             self.scheduler.add_job(
-                func=self.scan_and_signal,
-                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['signal_interval']),
-                id='signal_scan',
-                name='Signal Scanner',
+                func=self.quick_market_scan,
+                trigger=IntervalTrigger(minutes=5),
+                id='quick_scan',
+                name='Quick Market Scanner',
                 max_instances=1,
                 replace_existing=True
             )
             
-            # Health check (every 5 minutes)
+            # Full market scan (every 15 minutes with cron)
+            self.scheduler.add_job(
+                func=self.full_market_scan,
+                trigger=CronTrigger(minute='*/15'),  # Cron: every 15 minutes
+                id='full_scan',
+                name='Full Market Scanner',
+                max_instances=1,
+                replace_existing=True
+            )
+            
+            # Shutdown status check (every 5 minutes)
+            self.scheduler.add_job(
+                func=self.check_shutdown_status,
+                trigger=IntervalTrigger(minutes=5),
+                id='shutdown_check',
+                name='Shutdown Status Check',
+                max_instances=1,
+                replace_existing=True
+            )
+            
+            # Health check (every 10 minutes)
             self.scheduler.add_job(
                 func=self.health_check,
-                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['health_check_interval']),
+                trigger=IntervalTrigger(minutes=10),
                 id='health_check',
                 name='Health Check',
                 max_instances=1,
@@ -309,17 +434,17 @@ class ProTradeAIBot:
             # Cleanup (every hour)
             self.scheduler.add_job(
                 func=self.cleanup_old_data,
-                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['cleanup_interval']),
+                trigger=IntervalTrigger(hours=1),
                 id='cleanup',
                 name='Data Cleanup',
                 max_instances=1,
                 replace_existing=True
             )
             
-            # Daily summary (at 23:55 UTC)
+            # Daily summary (at 23:30 IST)
             self.scheduler.add_job(
                 func=self.send_daily_summary,
-                trigger=CronTrigger(hour=23, minute=55),
+                trigger=CronTrigger(hour=23, minute=30, timezone=self.timezone),
                 id='daily_summary',
                 name='Daily Summary',
                 max_instances=1,
@@ -330,19 +455,28 @@ class ProTradeAIBot:
             self.scheduler.start()
             self.is_running = True
             
+            # Check initial shutdown status
+            self.check_shutdown_status()
+            
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
             logger.info(f"📊 Monitoring {len(SYMBOLS)} symbols on {len(TIMEFRAMES)} timeframes")
-            logger.info(f"⏰ Signal scans every {SCHEDULER_CONFIG['signal_interval']} minutes")
+            logger.info(f"⚡ Quick scans every 5 minutes")
+            logger.info(f"🔍 Full scans every 15 minutes (cron)")
+            logger.info(f"🌙 Auto shutdown: 1-5 AM IST")
             logger.info(f"💰 Risk per trade: {RISK_PER_TRADE*100:.1f}% of ${CAPITAL:,.2f}")
             
             # Send startup notification
+            current_status = "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"
             telegram_notifier.send_message(
                 f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
                 f"✅ Bot is now running\n"
                 f"📊 Monitoring {len(SYMBOLS)} symbols\n"
-                f"⏰ Scanning every {SCHEDULER_CONFIG['signal_interval']} minutes\n"
+                f"⚡ Quick scans: Every 5 minutes\n"
+                f"🔍 Full scans: Every 15 minutes\n"
+                f"🌙 Auto shutdown: 1-5 AM IST\n"
                 f"💰 Capital: ${CAPITAL:,.2f}\n"
-                f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n\n"
+                f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n"
+                f"📈 Status: {current_status}\n\n"
                 f"<i>Ready to generate trading signals!</i>"
             )
             
@@ -396,7 +530,7 @@ class ProTradeAIBot:
 
 def main():
     """Main entry point"""
-    print("🤖 ProTradeAI Pro+ Trading Bot")
+    print("🤖 ProTradeAI Pro+ Trading Bot v2.0")
     print("=" * 50)
     
     # Create and run bot
@@ -410,7 +544,7 @@ def main():
             # Test mode - run one scan
             print("🧪 Running in test mode...")
             if bot.validate_configuration():
-                bot.scan_and_signal()
+                bot.quick_market_scan()
                 print("✅ Test completed")
             else:
                 print("❌ Configuration validation failed")
@@ -422,9 +556,18 @@ def main():
             for key, value in status.items():
                 print(f"  {key}: {value}")
                 
+        elif command == 'scan':
+            # Manual full scan
+            print("🔍 Running manual full scan...")
+            if bot.validate_configuration():
+                bot.full_market_scan()
+                print("✅ Scan completed")
+            else:
+                print("❌ Configuration validation failed")
+                
         else:
             print(f"Unknown command: {command}")
-            print("Available commands: test, status")
+            print("Available commands: test, status, scan")
     else:
         # Normal operation
         bot.run_forever()

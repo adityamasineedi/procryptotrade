@@ -1,203 +1,367 @@
 """
 ProTradeAI Pro+ Configuration
-Risk management, leverage settings, and trading parameters
+Enhanced configuration with auto shutdown and improved scheduling
 """
 
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
-# =============================================================================
-# TRADING CONFIGURATION
-# =============================================================================
+# ============================================================================
+# CORE TRADING SETTINGS
+# ============================================================================
 
-# Risk Management
-RISK_PER_TRADE = 0.02  # 2% of capital per trade
-MAX_DAILY_TRADES = 10
-MAX_OPEN_POSITIONS = 5
-CAPITAL = float(os.getenv('TRADING_CAPITAL', 10000))  # Default $10,000
-
-# Leverage Settings
-LEVERAGE_CONFIG = {
-    'conservative': {'min': 2, 'max': 3, 'atr_multiplier': 1.5},
-    'moderate': {'min': 3, 'max': 5, 'atr_multiplier': 2.0},
-    'aggressive': {'min': 5, 'max': 10, 'atr_multiplier': 2.5}
-}
-
-DEFAULT_LEVERAGE_MODE = 'moderate'
-
-# Signal Confidence Thresholds
-CONFIDENCE_THRESHOLDS = {
-    'A+': 90,  # Highest confidence
-    'A': 85,
-    'B+': 80,
-    'B': 75,
-    'C+': 70,
-    'C': 65,
-    'MIN_SIGNAL': 70  # Minimum confidence to send signal
-}
-
-# =============================================================================
-# TIMEFRAMES & SYMBOLS
-# =============================================================================
-
-TIMEFRAMES = ['1h', '4h', '1d']
+# Trading symbols (top cryptocurrencies)
 SYMBOLS = [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT',
     'XRPUSDT', 'DOTUSDT', 'LINKUSDT', 'LTCUSDT', 'MATICUSDT'
 ]
 
-# Timeframe priorities (higher number = higher priority)
+# Trading timeframes (priority order)
+TIMEFRAMES = ['1h', '4h', '1d']
+
+# Timeframe priority for signal selection
 TIMEFRAME_PRIORITY = {
-    '1h': 1,
-    '4h': 2,
-    '1d': 3
+    '1d': 100,  # Highest priority
+    '4h': 80,
+    '1h': 60,
+    '15m': 40,
+    '5m': 20    # Lowest priority
 }
 
-# =============================================================================
-# TECHNICAL INDICATORS
-# =============================================================================
+# Trading capital and risk settings
+CAPITAL = float(os.getenv('TRADING_CAPITAL', '10000'))
+RISK_PER_TRADE = float(os.getenv('RISK_PER_TRADE', '0.02'))  # 2% per trade
+MAX_DAILY_TRADES = int(os.getenv('MAX_DAILY_TRADES', '8'))
 
-INDICATOR_PARAMS = {
-    'rsi': {'period': 14, 'overbought': 70, 'oversold': 30},
-    'macd': {'fast': 12, 'slow': 26, 'signal': 9},
-    'bollinger': {'period': 20, 'std': 2},
-    'atr': {'period': 14},
-    'volume_sma': {'period': 20},
-    'ema_fast': {'period': 9},
-    'ema_slow': {'period': 21}
-}
-
-# =============================================================================
-# STOP LOSS & TAKE PROFIT
-# =============================================================================
-
-SL_TP_CONFIG = {
-    '1h': {'sl_atr_mult': 1.5, 'tp_atr_mult': 3.0, 'hold_hours': 2},
-    '4h': {'sl_atr_mult': 2.0, 'tp_atr_mult': 4.0, 'hold_hours': 8},
-    '1d': {'sl_atr_mult': 2.5, 'tp_atr_mult': 5.0, 'hold_hours': 24}
-}
-
-# =============================================================================
-# TELEGRAM CONFIGURATION
-# =============================================================================
-
-TELEGRAM_CONFIG = {
-    'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
-    'chat_id': os.getenv('TELEGRAM_CHAT_ID'),
-    'alert_format': 'pro_plus',  # 'pro_plus' or 'summary'
-    'retry_attempts': 3,
-    'retry_delay': 5  # seconds
-}
-
-# =============================================================================
-# SCHEDULER CONFIGURATION
-# =============================================================================
+# ============================================================================
+# SCHEDULER CONFIGURATION (Enhanced)
+# ============================================================================
 
 SCHEDULER_CONFIG = {
-    'signal_interval': 15,  # minutes
-    'health_check_interval': 5,  # minutes
-    'cleanup_interval': 60,  # minutes
-    'max_log_size_mb': 50
+    # Scanning intervals
+    'quick_scan_interval': 5,       # Minutes - Quick scan every 5 minutes
+    'full_scan_interval': 15,       # Minutes - Full scan every 15 minutes (cron)
+    'health_check_interval': 10,    # Minutes - Health check every 10 minutes
+    'shutdown_check_interval': 5,   # Minutes - Check shutdown status every 5 minutes
+    'cleanup_interval': 60,         # Minutes - Cleanup every hour
+    
+    # Auto shutdown settings
+    'auto_shutdown_enabled': True,
+    'shutdown_start_hour': 1,       # 1 AM IST
+    'shutdown_end_hour': 5,         # 5 AM IST
+    'shutdown_timezone': 'Asia/Kolkata',  # IST
+    
+    # Maintenance settings
+    'max_log_size_mb': 10,
+    'max_signal_history_days': 7,
+    'backup_frequency_hours': 6,
 }
 
-# =============================================================================
-# MODEL & AI CONFIGURATION
-# =============================================================================
-
-MODEL_CONFIG = {
-    'model_path': 'ai_model.pkl',
-    'feature_window': 100,  # Number of candles for features
-    'retrain_days': 7,  # Retrain every 7 days
-    'feature_importance_threshold': 0.01
-}
-
-# =============================================================================
-# DASHBOARD CONFIGURATION
-# =============================================================================
-
-DASHBOARD_CONFIG = {
-    'host': '0.0.0.0',
-    'port': 5000,
-    'debug': False,
-    'max_signals_display': 100,
-    'refresh_interval': 30  # seconds
-}
-
-# =============================================================================
-# LOGGING CONFIGURATION
-# =============================================================================
-
-LOGGING_CONFIG = {
-    'log_file': 'logs/protrade_ai.log',
-    'max_log_files': 5,
-    'log_level': 'INFO',
-    'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-}
-
-# =============================================================================
-# BINANCE API CONFIGURATION (Read-only for price data)
-# =============================================================================
+# ============================================================================
+# BINANCE API CONFIGURATION
+# ============================================================================
 
 BINANCE_CONFIG = {
     'base_url': 'https://api.binance.com',
     'timeout': 10,
-    'max_retries': 3
+    'max_retries': 3,
+    'retry_delay': 1,
+    'rate_limit_calls': 1200,  # Calls per minute
+    'rate_limit_window': 60    # Seconds
 }
 
-# =============================================================================
-# VALIDATION FUNCTIONS
-# =============================================================================
+def get_timeframe_minutes(timeframe: str) -> int:
+    """Convert timeframe string to minutes"""
+    timeframe_map = {
+        '1m': 1,
+        '5m': 5,
+        '15m': 15,
+        '30m': 30,
+        '1h': 60,
+        '4h': 240,
+        '1d': 1440,
+        '1w': 10080
+    }
+    return timeframe_map.get(timeframe, 60)
 
-def validate_config():
-    """Validate configuration settings"""
-    errors = []
-    
-    if not TELEGRAM_CONFIG['bot_token']:
-        errors.append("TELEGRAM_BOT_TOKEN not set in environment")
-    
-    if not TELEGRAM_CONFIG['chat_id']:
-        errors.append("TELEGRAM_CHAT_ID not set in environment")
-    
-    if CAPITAL <= 0:
-        errors.append("TRADING_CAPITAL must be positive")
-    
-    if RISK_PER_TRADE <= 0 or RISK_PER_TRADE > 0.1:
-        errors.append("RISK_PER_TRADE should be between 0 and 0.1 (10%)")
-    
-    return errors
+# ============================================================================
+# TELEGRAM CONFIGURATION (Enhanced)
+# ============================================================================
 
-def get_leverage_range(mode=None):
-    """Get leverage range for given mode"""
+TELEGRAM_CONFIG = {
+    'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+    'chat_id': os.getenv('TELEGRAM_CHAT_ID'),
+    'alert_format': os.getenv('TELEGRAM_ALERT_FORMAT', 'pro_plus'),  # 'pro_plus' or 'summary'
+    'retry_attempts': 3,
+    'retry_delay': 2,
+    'rate_limit_messages': 30,  # Messages per minute
+    'rate_limit_window': 60,    # Seconds
+    
+    # Enhanced notification settings
+    'send_startup_message': True,
+    'send_shutdown_messages': True,
+    'send_maintenance_alerts': True,
+    'send_error_alerts': True,
+    'send_daily_summary': True,
+    'send_health_reports': True,
+}
+
+# ============================================================================
+# AI MODEL CONFIGURATION
+# ============================================================================
+
+MODEL_CONFIG = {
+    'model_path': 'ai_model.pkl',
+    'backup_path': 'models/backups/',
+    'retrain_frequency_days': 7,
+    'feature_window': 100,  # Minimum data points needed
+    'validation_split': 0.2,
+    'random_state': 42,
+    
+    # Model performance thresholds
+    'min_accuracy': 0.65,
+    'min_precision': 0.70,
+    'min_recall': 0.65,
+    'retrain_if_below_threshold': True,
+}
+
+# ============================================================================
+# TECHNICAL INDICATORS PARAMETERS
+# ============================================================================
+
+INDICATOR_PARAMS = {
+    'rsi': {
+        'period': 14,
+        'overbought': 70,
+        'oversold': 30
+    },
+    'macd': {
+        'fast': 12,
+        'slow': 26,
+        'signal': 9
+    },
+    'bollinger': {
+        'period': 20,
+        'std': 2
+    },
+    'atr': {
+        'period': 14
+    },
+    'ema_fast': {
+        'period': 9
+    },
+    'ema_slow': {
+        'period': 21
+    },
+    'volume_sma': {
+        'period': 20
+    },
+    'stochastic': {
+        'k_period': 14,
+        'd_period': 3
+    },
+    'williams_r': {
+        'period': 14
+    }
+}
+
+# ============================================================================
+# CONFIDENCE AND SIGNAL THRESHOLDS
+# ============================================================================
+
+CONFIDENCE_THRESHOLDS = {
+    'MIN_SIGNAL': 70,      # Minimum confidence to generate signal
+    'HIGH_CONFIDENCE': 85, # High confidence threshold
+    'MAX_CONFIDENCE': 95,  # Maximum confidence cap
+}
+
+def get_confidence_grade(confidence: float) -> str:
+    """Get confidence grade letter"""
+    if confidence >= 90:
+        return 'A+'
+    elif confidence >= 85:
+        return 'A'
+    elif confidence >= 80:
+        return 'B+'
+    elif confidence >= 75:
+        return 'B'
+    elif confidence >= 70:
+        return 'C'
+    else:
+        return 'D'
+
+# ============================================================================
+# LEVERAGE CONFIGURATION
+# ============================================================================
+
+DEFAULT_LEVERAGE_MODE = os.getenv('LEVERAGE_MODE', 'moderate')
+
+LEVERAGE_CONFIG = {
+    'conservative': {
+        'min': 2,
+        'max': 3,
+        'description': 'Low risk, stable returns'
+    },
+    'moderate': {
+        'min': 3,
+        'max': 5,
+        'description': 'Balanced risk/reward'
+    },
+    'aggressive': {
+        'min': 5,
+        'max': 10,
+        'description': 'High risk, high reward'
+    }
+}
+
+def get_leverage_range(mode: str = None) -> dict:
+    """Get leverage range for specified mode"""
     mode = mode or DEFAULT_LEVERAGE_MODE
     return LEVERAGE_CONFIG.get(mode, LEVERAGE_CONFIG['moderate'])
 
-def get_confidence_grade(confidence):
-    """Convert confidence percentage to grade"""
-    for grade, threshold in CONFIDENCE_THRESHOLDS.items():
-        if grade == 'MIN_SIGNAL':
-            continue
-        if confidence >= threshold:
-            return grade
-    return 'D'
+# ============================================================================
+# STOP LOSS / TAKE PROFIT CONFIGURATION
+# ============================================================================
 
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
-
-def format_currency(amount):
-    """Format currency for display"""
-    return f"${amount:,.2f}"
-
-def format_percentage(value):
-    """Format percentage for display"""
-    return f"{value:.2f}%"
-
-def get_timeframe_minutes(timeframe):
-    """Convert timeframe to minutes"""
-    timeframe_map = {
-        '1m': 1, '5m': 5, '15m': 15, '30m': 30,
-        '1h': 60, '4h': 240, '1d': 1440
+SL_TP_CONFIG = {
+    '1h': {
+        'sl_atr_mult': 1.5,
+        'tp_atr_mult': 2.5,
+        'hold_hours': 4
+    },
+    '4h': {
+        'sl_atr_mult': 2.0,
+        'tp_atr_mult': 3.5,
+        'hold_hours': 8
+    },
+    '1d': {
+        'sl_atr_mult': 2.5,
+        'tp_atr_mult': 4.0,
+        'hold_hours': 24
     }
-    return timeframe_map.get(timeframe, 60)
+}
+
+# ============================================================================
+# DASHBOARD CONFIGURATION
+# ============================================================================
+
+DASHBOARD_CONFIG = {
+    'host': os.getenv('DASHBOARD_HOST', '127.0.0.1'),
+    'port': int(os.getenv('DASHBOARD_PORT', '5000')),
+    'debug': os.getenv('DASHBOARD_DEBUG', 'False').lower() == 'true',
+    'refresh_interval': 30,  # Seconds
+    'max_signals_display': 50,
+    'enable_charts': True,
+    'enable_realtime_updates': True,
+}
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+
+LOGGING_CONFIG = {
+    'level': os.getenv('LOG_LEVEL', 'INFO'),
+    'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    'log_file': 'logs/protrade_ai.log',
+    'max_file_size': '10MB',
+    'backup_count': 5,
+    'log_rotation': True,
+}
+
+# ============================================================================
+# PERFORMANCE MONITORING
+# ============================================================================
+
+PERFORMANCE_CONFIG = {
+    'track_signals': True,
+    'track_accuracy': True,
+    'track_returns': True,
+    'track_drawdown': True,
+    'performance_window_days': 30,
+    'benchmark_symbol': 'BTCUSDT',
+}
+
+# ============================================================================
+# SAFETY AND LIMITS
+# ============================================================================
+
+SAFETY_CONFIG = {
+    'max_concurrent_positions': 5,
+    'max_daily_loss_pct': 10,  # Stop trading if daily loss exceeds 10%
+    'max_drawdown_pct': 20,    # Alert if drawdown exceeds 20%
+    'cooldown_after_loss_minutes': 30,
+    'emergency_stop_enabled': True,
+}
+
+# ============================================================================
+# VALIDATION FUNCTIONS
+# ============================================================================
+
+def validate_config() -> list:
+    """Validate configuration settings and return errors"""
+    errors = []
+    
+    # Check required environment variables
+    required_vars = [
+        'TELEGRAM_BOT_TOKEN',
+        'TELEGRAM_CHAT_ID'
+    ]
+    
+    for var in required_vars:
+        if not os.getenv(var):
+            errors.append(f"Missing required environment variable: {var}")
+    
+    # Validate numeric ranges
+    if RISK_PER_TRADE <= 0 or RISK_PER_TRADE > 0.1:
+        errors.append("RISK_PER_TRADE must be between 0 and 0.1 (10%)")
+    
+    if CAPITAL <= 0:
+        errors.append("CAPITAL must be positive")
+    
+    if MAX_DAILY_TRADES <= 0 or MAX_DAILY_TRADES > 50:
+        errors.append("MAX_DAILY_TRADES must be between 1 and 50")
+    
+    # Validate timeframes
+    valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+    for tf in TIMEFRAMES:
+        if tf not in valid_timeframes:
+            errors.append(f"Invalid timeframe: {tf}")
+    
+    # Validate symbols
+    for symbol in SYMBOLS:
+        if not symbol.endswith('USDT'):
+            errors.append(f"Symbol {symbol} should end with USDT")
+    
+    return errors
+
+# ============================================================================
+# FEATURE FLAGS
+# ============================================================================
+
+FEATURE_FLAGS = {
+    'enable_auto_shutdown': True,
+    'enable_quick_scans': True,
+    'enable_full_scans': True,
+    'enable_telegram_alerts': True,
+    'enable_dashboard': True,
+    'enable_model_retraining': True,
+    'enable_performance_tracking': True,
+    'enable_risk_management': True,
+    'enable_backup_system': True,
+}
+
+# ============================================================================
+# EXPORT VALIDATION
+# ============================================================================
+
+# Validate configuration on import
+config_errors = validate_config()
+if config_errors:
+    print("⚠️  Configuration Errors Found:")
+    for error in config_errors:
+        print(f"   - {error}")
+    print("\n📋 Please fix these errors before running the bot.")
