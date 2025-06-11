@@ -83,5 +83,5 @@ data/
 Thumbs.db
 
 # Secrets
-config.py
+# config.py
 *.env
