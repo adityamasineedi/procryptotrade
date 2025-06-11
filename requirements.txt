@@ -1,0 +1,45 @@
+# ProTradeAI Pro+ Dependencies
+# Python 3.11 Compatible Versions
+
+# Core Trading & AI
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+xgboost==2.0.3
+joblib==1.4.2
+ta==0.11.0
+
+# Web Framework & API
+flask==3.0.3
+requests==2.32.3
+werkzeug==3.0.3
+
+# Scheduling & Background Tasks
+APScheduler==3.10.4
+
+# Environment & Configuration
+python-dotenv==1.0.1
+
+# Logging & Utilities
+colorlog==6.8.2
+
+# Data Visualization (for dashboard)
+plotly==5.22.0
+
+# Additional Python 3.11 optimized packages
+scipy==1.13.1
+threadpoolctl==3.5.0
+
+# Optional: For enhanced model features (Python 3.11 compatible)
+# lightgbm==4.4.0
+# catboost==1.2.5
+
+# Development & Testing (optional)
+# pytest==8.2.2
+# jupyter==1.0.0
+
+# System monitoring (optional)
+# psutil==6.0.0
+
+# Python 3.11 specific optimizations
+# typing-extensions==4.12.2  # For enhanced type hints
