@@ -174,9 +174,11 @@ INDICATOR_PARAMS = {
 # ============================================================================
 
 CONFIDENCE_THRESHOLDS = {
-    'MIN_SIGNAL': 60,      # Reduced from 70 for low volatility market
-    'HIGH_CONFIDENCE': 75, # Reduced from 85 
-    'MAX_CONFIDENCE': 90,  # Reduced from 95
+    'MIN_SIGNAL': 50,               # Lowered for sideways markets
+    'HIGH_CONFIDENCE': 70,          # Reduced from 75
+    'MAX_CONFIDENCE': 90,           # Keep at 90
+    'RANGE_TRADING_MIN': 55,        # Specific for range trading
+    'TREND_TRADING_MIN': 60,        # Higher requirement for trend trading
 }
 
 # ============================================================================
@@ -302,6 +304,45 @@ SAFETY_CONFIG = {
     'max_drawdown_pct': 20,    # Alert if drawdown exceeds 20%
     'cooldown_after_loss_minutes': 30,
     'emergency_stop_enabled': True,
+}
+
+# ============================================================================
+# SIDEWAYS MARKET TRADING CONFIGURATION
+# ============================================================================
+
+# Market regime detection settings
+MARKET_REGIME_CONFIG = {
+    'sideways_threshold': 0.3,      # Price movement ratio for sideways detection
+    'trending_threshold': 0.7,      # Price movement ratio for trending detection
+    'bb_squeeze_threshold': 0.04,   # Bollinger Band squeeze indicator
+    'min_range_size_pct': 2.0,      # Minimum range size to trade (2%)
+    'regime_lookback': 20,          # Candles to analyze for regime detection
+}
+
+# Range trading specific settings
+RANGE_TRADING_CONFIG = {
+    'support_proximity': 0.2,       # 20% of range from support = "near support"
+    'resistance_proximity': 0.2,    # 20% of range from resistance = "near resistance"
+    'entry_buffer': 0.02,           # 2% buffer for entries (within 2% of levels)
+    'exit_buffer': 0.01,            # 1% buffer for exits (1% before levels)
+    'max_range_leverage': 3,        # Maximum leverage for range trading
+    'min_range_leverage': 2,        # Minimum leverage for range trading
+}
+
+# RSI levels for sideways trading
+SIDEWAYS_RSI_CONFIG = {
+    'oversold_level': 40,           # RSI below this = oversold in sideways
+    'overbought_level': 60,         # RSI above this = overbought in sideways
+    'extreme_oversold': 35,         # Very oversold for mean reversion
+    'extreme_overbought': 65,       # Very overbought for mean reversion
+}
+
+# Confidence thresholds for different strategies
+STRATEGY_CONFIDENCE = {
+    'trending_min': 60,             # Minimum confidence for trending signals
+    'range_trading_min': 55,        # Lower threshold for range trading
+    'mean_reversion_min': 50,       # Even lower for mean reversion
+    'sideways_bonus': 5,            # Extra confidence points in sideways markets
 }
 
 # ============================================================================

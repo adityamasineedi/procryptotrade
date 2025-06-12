@@ -190,21 +190,109 @@ Time: {self.format_ist_time(signal['timestamp'])}
         else:
             return "📊"
     
-    def send_signal_alert(self, signal: Dict) -> bool:
-        """Send trading signal alert"""
+    def format_sideways_signal(self, signal: Dict) -> str:
+        """Format sideways market signals with range trading info"""
         try:
-            # Choose format based on config
-            if TELEGRAM_CONFIG['alert_format'] == 'pro_plus':
-                message = self.format_pro_plus_signal(signal)
+            # Determine strategy emoji and description
+            strategy_type = signal.get('strategy_type', 'UNKNOWN')
+            
+            if 'RANGE_LONG' in strategy_type:
+                direction_emoji = f"{SIDEWAYS_ALERT_CONFIG['range_long_emoji']} "
+                strategy_desc = "Range Trading - Buy Support"
+            elif 'RANGE_SHORT' in strategy_type:
+                direction_emoji = f"{SIDEWAYS_ALERT_CONFIG['range_short_emoji']} "
+                strategy_desc = "Range Trading - Sell Resistance"
+            elif 'MEAN_REVERSION' in strategy_type:
+                direction_emoji = f"{SIDEWAYS_ALERT_CONFIG['mean_reversion_emoji']} "
+                strategy_desc = "Mean Reversion Trade"
             else:
-                message = self.format_summary_signal(signal)
+                direction_emoji = "🔄"
+                strategy_desc = "Sideways Market Trade"
+            
+            # Support/Resistance info
+            support_level = signal.get('support_level', 0)
+            resistance_level = signal.get('resistance_level', 0)
+            range_size_pct = signal.get('range_size_pct', 0)
+            position_in_range = signal.get('position_in_range', 0)
+            
+            # Calculate position size
+            risk_amount = CAPITAL * RISK_PER_TRADE
+            entry_price = signal['current_price']
+            sl_price = signal.get('sl_price', entry_price)
+            
+            position_size = (risk_amount * signal['leverage']) / abs(entry_price - sl_price) if abs(entry_price - sl_price) > 0 else 0
+            position_value = position_size * entry_price
+            
+            message = f"""
+🔄 <b>ProTradeAI Pro+ Sideways Signal</b> 📊
+
+{direction_emoji} <b>{signal['symbol']} - {signal['signal_type']}</b>
+🎯 <b>Strategy:</b> {strategy_desc}
+⚡ <b>Leverage:</b> {signal['leverage']}x
+📈 <b>Timeframe:</b> {signal['timeframe']}
+🎯 <b>Confidence:</b> {signal['confidence']:.1f}% ({signal['confidence_grade']})
+
+💰 <b>ENTRY ZONE</b>
+🔸 Entry Price: ${signal['current_price']:.4f}
+🔸 Position Size: {position_size:.2f} {signal['symbol'].replace('USDT', '')}
+🔸 Position Value: ${position_value:.2f}
+
+📊 <b>RANGE ANALYSIS</b>
+{SIDEWAYS_ALERT_CONFIG['support_emoji']} Support: ${support_level:.4f}
+{SIDEWAYS_ALERT_CONFIG['resistance_emoji']} Resistance: ${resistance_level:.4f}
+{SIDEWAYS_ALERT_CONFIG['range_emoji']} Range Size: {range_size_pct:.2f}%
+📍 Position in Range: {position_in_range:.1%}
+
+🛡️ <b>RISK MANAGEMENT</b>
+🔻 Stop Loss: ${signal.get('sl_price', 0):.4f} (-{signal.get('sl_distance_pct', 0):.2f}%)
+🎯 Take Profit: ${signal.get('tp_price', 0):.4f} (+{signal.get('tp_distance_pct', 0):.2f}%)
+📊 R:R Ratio: 1:{signal.get('rr_ratio', 0):.2f}
+
+📋 <b>TECHNICAL ANALYSIS</b>
+📍 RSI: {signal.get('rsi', 0):.1f}
+📍 Market Regime: {signal.get('market_regime', 'SIDEWAYS')}
+📍 Strategy: {strategy_type}
+
+⏰ <b>TIMING</b>
+🕐 Signal Time: {self.format_ist_time(signal['timestamp'])}
+⏳ Expected Duration: 4-12 hours
+💼 Risk per Trade: {RISK_PER_TRADE*100:.1f}% (${risk_amount:.2f})
+
+⚠️ <b>SIDEWAYS MARKET STRATEGY</b>
+📊 Range-bound trading approach
+🔄 Take profit at opposite range level
+📈 Monitor for breakout signals
+
+<b>ProTradeAI Pro+ | Sideways Signal #{self.alert_count + 1}</b>
+            """.strip()
+            
+            return message
+            
+        except Exception as e:
+            logger.error(f"Error formatting sideways signal: {e}")
+            return self._format_simple_signal(signal)
+
+    def send_signal_alert(self, signal: Dict) -> bool:
+        """Enhanced signal alert with market regime detection"""
+        try:
+            # Check if it's a sideways market signal
+            market_regime = signal.get('market_regime', 'TRENDING')
+            
+            if market_regime == 'SIDEWAYS' or 'RANGE' in signal.get('strategy_type', ''):
+                message = self.format_sideways_signal(signal)
+            else:
+                # Use existing formatting for trending signals
+                if TELEGRAM_CONFIG['alert_format'] == 'pro_plus':
+                    message = self.format_pro_plus_signal(signal)
+                else:
+                    message = self.format_summary_signal(signal)
             
             # Send message
             success = self.send_message(message)
             
             if success:
                 self.alert_count += 1
-                logger.info(f"Signal alert sent for {signal['symbol']} {signal['signal_type']}")
+                logger.info(f"Signal alert sent for {signal['symbol']} {signal['signal_type']} ({market_regime})")
             
             return success
             

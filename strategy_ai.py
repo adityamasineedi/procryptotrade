@@ -528,5 +528,223 @@ class StrategyAI:
         
         return debug_info
 
+    def detect_market_regime(self, df: pd.DataFrame) -> str:
+        """Detect if market is trending or sideways"""
+        try:
+            # Calculate trend strength indicators
+            price_range = df['high'].rolling(20).max() - df['low'].rolling(20).min()
+            price_movement = abs(df['close'].iloc[-1] - df['close'].iloc[-20])
+            range_ratio = price_movement / price_range.iloc[-1] if price_range.iloc[-1] > 0 else 0
+
+            # ADX for trend strength (simplified)
+            high_low = df['high'] - df['low']
+            high_close = abs(df['high'] - df['close'].shift(1))
+            low_close = abs(df['low'] - df['close'].shift(1))
+
+            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            atr = true_range.rolling(14).mean()
+
+            # Bollinger Band squeeze indicator
+            bb_squeeze = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+            avg_squeeze = bb_squeeze.rolling(20).mean().iloc[-1]
+
+            # Market regime determination
+            if range_ratio < 0.3 and avg_squeeze < 0.04:  # Low movement, tight bands
+                return "SIDEWAYS"
+            elif range_ratio > 0.7:  # Strong directional movement
+                return "TRENDING"
+            else:
+                return "MIXED"
+        except Exception as e:
+            logger.error(f"Error detecting market regime: {e}")
+            return "MIXED"
+
+    def calculate_support_resistance(self, df: pd.DataFrame, lookback: int = 20) -> Dict:
+        """Calculate dynamic support and resistance levels"""
+        try:
+            # Recent highs and lows
+            recent_highs = df['high'].rolling(lookback).max()
+            recent_lows = df['low'].rolling(lookback).min()
+
+            # Current levels
+            resistance = recent_highs.iloc[-1]
+            support = recent_lows.iloc[-1]
+            current_price = df['close'].iloc[-1]
+
+            # Range size
+            range_size = resistance - support
+            range_midpoint = (resistance + support) / 2
+
+            # Position in range (0 = at support, 1 = at resistance)
+            position_in_range = (current_price - support) / range_size if range_size > 0 else 0.5
+
+            return {
+                'support': support,
+                'resistance': resistance,
+                'midpoint': range_midpoint,
+                'range_size': range_size,
+                'position_in_range': position_in_range,
+                'near_support': position_in_range < 0.2,  # Within 20% of support
+                'near_resistance': position_in_range > 0.8,  # Within 20% of resistance
+                'near_midpoint': 0.4 < position_in_range < 0.6  # Middle 20%
+            }
+        except Exception as e:
+            logger.error(f"Error calculating support/resistance: {e}")
+            return {}
+
+    def generate_sideways_signal(self, symbol: str, timeframe: str, df: pd.DataFrame) -> Optional[Dict]:
+        """Generate signals specifically for sideways markets"""
+        try:
+            # Get current market data
+            current_price = df['close'].iloc[-1]
+            rsi = df['rsi'].iloc[-1]
+
+            # Calculate support/resistance
+            sr_data = self.calculate_support_resistance(df)
+            if not sr_data:
+                return None
+
+            # Range trading conditions
+            range_size_pct = (sr_data['range_size'] / current_price) * 100
+
+            # Only trade if range is significant enough (at least 2%)
+            if range_size_pct < 2.0:
+                logger.info(f"Range too small for {symbol}: {range_size_pct:.2f}%")
+                return None
+
+            signal_type = None
+            confidence = 0
+            strategy_type = "RANGE"
+
+            # LONG signals (buy near support)
+            if (sr_data['near_support'] and 
+                rsi < 40 and  # Oversold
+                current_price < sr_data['support'] * 1.02):  # Within 2% of support
+
+                signal_type = "LONG"
+                confidence = 65 + (40 - rsi) * 0.5  # Higher confidence when more oversold
+                strategy_type = "RANGE_LONG"
+
+            # SHORT signals (sell near resistance) 
+            elif (sr_data['near_resistance'] and 
+                  rsi > 60 and  # Overbought
+                  current_price > sr_data['resistance'] * 0.98):  # Within 2% of resistance
+
+                signal_type = "SHORT"
+                confidence = 65 + (rsi - 60) * 0.5  # Higher confidence when more overbought
+                strategy_type = "RANGE_SHORT"
+
+            # Mean reversion signals (trade back to midpoint)
+            elif sr_data['near_support'] and rsi < 35:
+                signal_type = "LONG"
+                confidence = 60
+                strategy_type = "MEAN_REVERSION_LONG"
+
+            elif sr_data['near_resistance'] and rsi > 65:
+                signal_type = "SHORT" 
+                confidence = 60
+                strategy_type = "MEAN_REVERSION_SHORT"
+
+            if not signal_type:
+                return None
+
+            # Calculate range-based SL/TP
+            if signal_type == "LONG":
+                entry_price = current_price
+                sl_price = sr_data['support'] * 0.995  # Slightly below support
+                tp_price = sr_data['resistance'] * 0.99   # Slightly below resistance
+
+            else:  # SHORT
+                entry_price = current_price
+                sl_price = sr_data['resistance'] * 1.005  # Slightly above resistance
+                tp_price = sr_data['support'] * 1.01     # Slightly above support
+
+            # Calculate leverage (lower for range trading)
+            leverage = min(3, max(2, int(confidence / 25)))
+
+            # Create sideways market signal
+            signal = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'signal_type': signal_type,
+                'strategy_type': strategy_type,
+                'confidence': confidence,
+                'confidence_grade': get_confidence_grade(confidence),
+                'leverage': leverage,
+                'timestamp': datetime.now(),
+                'current_price': current_price,
+                'entry_price': entry_price,
+                'sl_price': sl_price,
+                'tp_price': tp_price,
+                'sl_distance_pct': abs(entry_price - sl_price) / entry_price * 100,
+                'tp_distance_pct': abs(tp_price - entry_price) / entry_price * 100,
+                'rr_ratio': abs(tp_price - entry_price) / abs(entry_price - sl_price),
+                'support_level': sr_data['support'],
+                'resistance_level': sr_data['resistance'],
+                'range_size_pct': range_size_pct,
+                'position_in_range': sr_data['position_in_range'],
+                'rsi': rsi,
+                'market_regime': 'SIDEWAYS'
+            }
+
+            logger.info(f"Sideways signal: {symbol} {signal_type} at {sr_data['position_in_range']:.1%} of range")
+            return signal
+
+        except Exception as e:
+            logger.error(f"Error generating sideways signal for {symbol}: {e}")
+            return None
+
+    def predict_signal_enhanced(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        """Enhanced signal prediction with market regime detection"""
+        try:
+            # Original cooldown check
+            signal_key = f"{symbol}_{timeframe}"
+            market_volatility = self.get_market_volatility()
+
+            if market_volatility < MARKET_CONDITIONS['low_volatility_threshold']:
+                cooldown_minutes = 30 if timeframe == '1h' else 45
+            else:
+                cooldown_minutes = 60 if timeframe == '1h' else 90
+
+            if signal_key in self.last_signals:
+                last_time = self.last_signals[signal_key]
+                if datetime.now() - last_time < timedelta(minutes=cooldown_minutes):
+                    return None
+
+            # Get market data
+            df = self.get_binance_data(symbol, timeframe)
+            if df.empty or len(df) < MODEL_CONFIG['feature_window']:
+                return None
+
+            # Calculate indicators
+            df = self.calculate_technical_indicators(df)
+
+            # Detect market regime
+            market_regime = self.detect_market_regime(df)
+            logger.info(f"Market regime for {symbol} {timeframe}: {market_regime}")
+
+            # Choose strategy based on market regime
+            if market_regime == "SIDEWAYS":
+                # Use sideways trading strategy
+                signal = self.generate_sideways_signal(symbol, timeframe, df)
+
+            elif market_regime == "TRENDING":
+                # Use original trending strategy (your existing predict_signal method)
+                signal = self.predict_signal(symbol, timeframe)
+
+            else:  # MIXED
+                # Try both strategies, prefer sideways if trending fails
+                signal = self.predict_signal(symbol, timeframe)
+                if not signal:
+                    signal = self.generate_sideways_signal(symbol, timeframe, df)
+
+            if signal:
+                self.last_signals[signal_key] = datetime.now()
+
+            return signal
+
+        except Exception as e:
+            logger.error(f"Error in enhanced signal prediction: {e}")
+            return None
 # Global strategy instance
 strategy_ai = StrategyAI()

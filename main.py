@@ -155,30 +155,34 @@ class ProTradeAIBot:
         return True
     
     def quick_market_scan(self):
-        """Enhanced quick market scan with debug info"""
+        """Enhanced market scan with sideways trading support"""
         try:
             if self.is_shutdown_period:
                 logger.info("Skipping quick scan - in shutdown period")
                 return
 
-            logger.info("🔍 Starting enhanced quick market scan...")
+            logger.info("🔍 Starting enhanced market scan (trending + sideways)...")
             
-            # Check market conditions first
+            # Check overall market conditions
             market_volatility = strategy_ai.get_market_volatility()
             logger.info(f"📊 Current market volatility: {market_volatility:.4f}")
             
-            # Adapt scan based on market conditions
+            # Adaptive scanning based on market conditions
             if market_volatility < MARKET_CONDITIONS['low_volatility_threshold']:
                 scan_symbols = SYMBOLS[:5]  # Focus on top 5 in low volatility
-                scan_timeframes = ['4h', '1d']  # Higher timeframes only
-                logger.info("🌙 Low volatility detected - using conservative scan")
+                scan_timeframes = ['4h', '1h']  # Include 1h for more range opportunities
+                scan_strategy = "SIDEWAYS_FOCUSED"
+                logger.info("🔄 Low volatility - focusing on range/sideways trading")
             else:
                 scan_symbols = SYMBOLS[:3]
                 scan_timeframes = ['1h', '4h']
-                logger.info("⚡ Normal volatility - using standard scan")
+                scan_strategy = "TREND_FOCUSED"
+                logger.info("⚡ Normal volatility - using standard trend scanning")
 
             signals = []
             processed_pairs = 0
+            trending_signals = 0
+            sideways_signals = 0
             
             for symbol in scan_symbols:
                 for timeframe in scan_timeframes:
@@ -186,35 +190,51 @@ class ProTradeAIBot:
                         processed_pairs += 1
                         logger.info(f"🔎 Scanning {symbol} {timeframe} ({processed_pairs}/{len(scan_symbols)*len(scan_timeframes)})")
                         
-                        signal = strategy_ai.predict_signal(symbol, timeframe)
+                        # Use enhanced signal prediction (combines trending + sideways)
+                        signal = strategy_ai.predict_signal_enhanced(symbol, timeframe)
+                        
                         if signal:
                             signals.append(signal)
-                            logger.info(f"✅ Signal found: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
+                            
+                            # Track signal types
+                            market_regime = signal.get('market_regime', 'TRENDING')
+                            if market_regime == 'SIDEWAYS' or 'RANGE' in signal.get('strategy_type', ''):
+                                sideways_signals += 1
+                                logger.info(f"✅ SIDEWAYS Signal: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}% (Range trading)")
+                            else:
+                                trending_signals += 1
+                                logger.info(f"✅ TRENDING Signal: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}% (Momentum)")
                         else:
                             logger.debug(f"❌ No signal: {symbol} {timeframe}")
                             
                     except Exception as e:
                         logger.error(f"Error scanning {symbol} {timeframe}: {e}")
 
-            if signals:
-                logger.info(f"🎯 Quick scan generated {len(signals)} signals")
+            # Results summary
+            total_signals = len(signals)
+            if total_signals > 0:
+                logger.info(f"🎯 Market scan generated {total_signals} signals:")
+                logger.info(f"   📈 Trending signals: {trending_signals}")
+                logger.info(f"   🔄 Sideways signals: {sideways_signals}")
+                logger.info(f"   📊 Strategy mix: {scan_strategy}")
+                
                 for signal in signals:
                     self.process_signal(signal)
             else:
-                logger.info("📭 Quick scan: No signals generated")
+                logger.info("📭 Market scan: No signals generated")
                 
-                # If no signals in multiple scans, run debug
+                # Enhanced debug info for no signals
                 if not hasattr(self, '_last_debug_time'):
                     self._last_debug_time = datetime.now()
                 
                 time_since_debug = datetime.now() - self._last_debug_time
-                if time_since_debug > timedelta(hours=2):  # Debug every 2 hours if no signals
-                    logger.info("🔧 Running signal generation debug...")
-                    self.debug_no_signals()
+                if time_since_debug > timedelta(hours=1):  # Debug every hour if no signals
+                    logger.info("🔧 Running enhanced signal generation debug...")
+                    self.debug_no_signals_enhanced()
                     self._last_debug_time = datetime.now()
 
         except Exception as e:
-            logger.error(f"Error in enhanced quick market scan: {e}")
+            logger.error(f"Error in enhanced market scan: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
     
@@ -563,49 +583,101 @@ class ProTradeAIBot:
         finally:
             self.stop()
 
-    def debug_no_signals(self):
-        """Debug why no signals are being generated"""
-        logger.info("🔍 Starting signal generation debug...")
+    def debug_no_signals_enhanced(self):
+        """Enhanced debug for both trending and sideways signals"""
+        logger.info("🔍 Starting enhanced signal generation debug (trending + sideways)...")
         
         try:
             # Get debug info from strategy
             debug_info = strategy_ai.debug_signal_generation()
             
-            logger.info("🤖 Model Status:")
+            logger.info("🤖 Enhanced Model Status:")
             logger.info(f"  - Model loaded: {debug_info['model_loaded']}")
             logger.info(f"  - Feature columns: {debug_info['feature_columns']}")
-            logger.info(f"  - Recent signals: {debug_info['last_signals_count']}")
             logger.info(f"  - Market volatility: {debug_info['market_volatility']:.4f}")
             
-            logger.info("📊 Symbol Analysis:")
-            for symbol, analysis in debug_info['symbol_analysis'].items():
-                logger.info(f"  {symbol}:")
-                for timeframe, data in analysis.items():
-                    if 'error' in data:
-                        logger.error(f"    {timeframe}: ERROR - {data['error']}")
-                    else:
-                        logger.info(f"    {timeframe}: Data={data.get('data_available', False)}, "
-                                    f"Length={data.get('data_length', 0)}, "
-                                    f"Prediction={data.get('model_prediction', 'N/A')}, "
-                                    f"Confidence={data.get('adjusted_confidence', 0):.1f}%")
+            # Test both trending and sideways approaches
+            logger.info("🔧 Testing Dual Strategy Approach...")
             
-            # Check if we should force a signal generation test
-            logger.info("🧪 Testing forced signal generation...")
-            test_signal = strategy_ai.predict_signal('BTCUSDT', '4h')
+            test_symbols = ['BTCUSDT', 'ETHUSDT']
+            for symbol in test_symbols:
+                try:
+                    # Test market regime detection
+                    df = strategy_ai.get_binance_data(symbol, '4h', limit=50)
+                    if not df.empty:
+                        df = strategy_ai.calculate_technical_indicators(df)
+                        regime = strategy_ai.detect_market_regime(df)
+                        
+                        logger.info(f"📊 {symbol} Market Analysis:")
+                        logger.info(f"   - Market regime: {regime}")
+                        
+                        # Test trending signal
+                        trending_signal = strategy_ai.predict_signal(symbol, '4h')
+                        trending_result = f"Generated {trending_signal['signal_type']}" if trending_signal else "No signal"
+                        logger.info(f"   - Trending approach: {trending_result}")
+                        
+                        # Test sideways signal
+                        sideways_signal = strategy_ai.generate_sideways_signal(symbol, '4h', df)
+                        sideways_result = f"Generated {sideways_signal['signal_type']}" if sideways_signal else "No signal"
+                        logger.info(f"   - Sideways approach: {sideways_result}")
+                        
+                        # Test enhanced (combined) signal
+                        enhanced_signal = strategy_ai.predict_signal_enhanced(symbol, '4h')
+                        enhanced_result = f"Generated {enhanced_signal['signal_type']}" if enhanced_signal else "No signal"
+                        logger.info(f"   - Enhanced approach: {enhanced_result}")
+                        
+                except Exception as e:
+                    logger.error(f"Error in enhanced debug for {symbol}: {e}")
             
-            if test_signal:
-                logger.info(f"✅ Test signal generated: {test_signal['symbol']} {test_signal['signal_type']} {test_signal['confidence']:.1f}%")
+            # Market condition summary
+            market_volatility = strategy_ai.get_market_volatility()
+            if market_volatility < 0.03:
+                logger.info("💡 LOW VOLATILITY DETECTED:")
+                logger.info("   - Trending signals will be rare (expected)")
+                logger.info("   - Sideways signals should be more frequent")
+                logger.info("   - This is normal market behavior")
             else:
-                logger.warning("❌ No test signal generated")
-                
-            return debug_info
+                logger.info("📈 NORMAL VOLATILITY:")
+                logger.info("   - Both trending and sideways signals possible")
+                logger.info("   - Mixed strategy approach active")
             
         except Exception as e:
-            logger.error(f"Error in debug process: {e}")
+            logger.error(f"Error in enhanced debug process: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            return None
 
+    def get_enhanced_status(self) -> Dict:
+        """Get enhanced bot status with sideways trading info"""
+        base_status = self.get_status()
+        
+        try:
+            # Add sideways trading specific status
+            market_volatility = strategy_ai.get_market_volatility()
+            
+            # Count recent signal types
+            today_signals = [s for s in self.signals_today if s['timestamp'] > datetime.now() - timedelta(hours=24)]
+            trending_count = len([s for s in today_signals if s.get('market_regime') != 'SIDEWAYS'])
+            sideways_count = len([s for s in today_signals if s.get('market_regime') == 'SIDEWAYS'])
+            
+            enhanced_status = {
+                **base_status,
+                'market_volatility': market_volatility,
+                'volatility_regime': 'LOW' if market_volatility < 0.03 else 'NORMAL',
+                'trading_mode': 'SIDEWAYS_FOCUSED' if market_volatility < 0.03 else 'MIXED',
+                'signals_today_by_type': {
+                    'trending': trending_count,
+                    'sideways': sideways_count,
+                    'total': len(today_signals)
+                },
+                'sideways_features_enabled': hasattr(strategy_ai, 'detect_market_regime'),
+                'enhanced_prediction_active': hasattr(strategy_ai, 'predict_signal_enhanced')
+            }
+            
+            return enhanced_status
+            
+        except Exception as e:
+            logger.error(f"Error getting enhanced status: {e}")
+            return base_status
 def main():
     """Main entry point"""
     print("🤖 ProTradeAI Pro+ Trading Bot v2.0")
