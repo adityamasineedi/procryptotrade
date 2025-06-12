@@ -8,6 +8,7 @@ import numpy as np
 import requests
 import pickle
 import logging
+import os
 from datetime import datetime, timedelta
 import ta
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier

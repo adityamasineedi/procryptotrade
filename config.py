@@ -310,6 +310,18 @@ SAFETY_CONFIG = {
 # SIDEWAYS MARKET TRADING CONFIGURATION
 # ============================================================================
 
+# Sideways market alert configuration (for Telegram notifications)
+SIDEWAYS_ALERT_CONFIG = {
+    'range_long_emoji': '📈',
+    'range_short_emoji': '📉', 
+    'mean_reversion_emoji': '🔄',
+    'support_emoji': '🟢',
+    'resistance_emoji': '🔴',
+    'range_emoji': '📊',
+    'breakout_emoji': '💥',
+    'consolidation_emoji': '⏸️'
+}
+
 # Market regime detection settings
 MARKET_REGIME_CONFIG = {
     'sideways_threshold': 0.3,      # Price movement ratio for sideways detection
