@@ -14,9 +14,24 @@ from typing import Dict, Tuple, Optional, List
 import joblib
 from sklearn.ensemble import RandomForestClassifier
 import warnings
+
 warnings.filterwarnings('ignore')
 
-from config import *
+from config import (
+    MODEL_CONFIG,
+    BINANCE_CONFIG,
+    INDICATOR_PARAMS,
+    SL_TP_CONFIG,
+    SYMBOLS,
+    TIMEFRAMES,
+    MAX_DAILY_TRADES,
+    TIMEFRAME_PRIORITY,
+    CONFIDENCE_THRESHOLDS,
+    DEFAULT_LEVERAGE_MODE,
+    get_leverage_range,
+    get_confidence_grade,
+    MARKET_CONDITIONS
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -284,78 +299,102 @@ class StrategyAI:
             return {}
     
     def predict_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
-        """Generate trading signal for symbol and timeframe"""
+        """Generate trading signal for symbol and timeframe - Enhanced version"""
         try:
-            # Skip if we recently sent a signal for this pair
+            # Calculate dynamic cooldown based on market conditions
             signal_key = f"{symbol}_{timeframe}"
+            
+            # Reduced cooldown for low volatility markets
+            market_volatility = self.get_market_volatility()
+            if market_volatility < MARKET_CONDITIONS['low_volatility_threshold']:
+                cooldown_minutes = 30 if timeframe == '1h' else 45  # Reduced cooldown
+            else:
+                cooldown_minutes = 60 if timeframe == '1h' else 90  # Normal cooldown
+            
             if signal_key in self.last_signals:
                 last_time = self.last_signals[signal_key]
-                if datetime.now() - last_time < timedelta(hours=1):
+                if datetime.now() - last_time < timedelta(minutes=cooldown_minutes):
+                    logger.debug(f"Signal cooldown active for {symbol} {timeframe} ({cooldown_minutes}m)")
                     return None
-            
+
             # Get market data
             df = self.get_binance_data(symbol, timeframe)
             if df.empty or len(df) < MODEL_CONFIG['feature_window']:
-                logger.warning(f"Insufficient data for {symbol} {timeframe}")
+                logger.warning(f"Insufficient data for {symbol} {timeframe}: {len(df)} candles")
                 return None
-            
+
             # Calculate indicators
             df = self.calculate_technical_indicators(df)
             
+            # Check for sufficient indicator data
+            required_indicators = ['rsi', 'macd', 'atr', 'bb_upper', 'bb_lower']
+            missing_indicators = [ind for ind in required_indicators if df[ind].isna().all()]
+            if missing_indicators:
+                logger.warning(f"Missing indicators for {symbol} {timeframe}: {missing_indicators}")
+                return None
+
             # Prepare features
             features = self.prepare_features(df)
             if features.size == 0:
+                logger.warning(f"No features prepared for {symbol} {timeframe}")
                 return None
-            
+
             # Get model prediction
             prediction = self.model.predict(features)[0]
             probabilities = self.model.predict_proba(features)[0]
-            
+
             # Convert prediction to signal
             signal_map = {0: 'HOLD', 1: 'LONG', 2: 'SHORT'}
             signal_type = signal_map[prediction]
+
+            # Calculate raw confidence
+            raw_confidence = max(probabilities) * 100
             
-            if signal_type == 'HOLD':
+            # Adjust confidence for market conditions
+            adjusted_confidence = self.adjust_confidence_for_market(raw_confidence)
+            
+            logger.info(f"Signal analysis for {symbol} {timeframe}: {signal_type}, raw confidence: {raw_confidence:.1f}%, adjusted: {adjusted_confidence:.1f}%")
+
+            # Apply adjusted confidence threshold
+            if signal_type == 'HOLD' or adjusted_confidence < CONFIDENCE_THRESHOLDS['MIN_SIGNAL']:
+                logger.info(f"Signal filtered out - Type: {signal_type}, Confidence: {adjusted_confidence:.1f}%")
                 return None
-            
-            # Calculate confidence
-            confidence = max(probabilities) * 100
-            
-            # Check minimum confidence threshold
-            if confidence < CONFIDENCE_THRESHOLDS['MIN_SIGNAL']:
-                return None
-            
+
             # Calculate leverage
-            leverage = self.calculate_leverage(df, confidence)
-            
+            leverage = self.calculate_leverage(df, adjusted_confidence)
+
             # Calculate SL/TP
             sl_tp_data = self.calculate_sl_tp(df, signal_type, timeframe, leverage)
-            
-            # Create signal
+
+            # Create signal with market volatility info
             signal = {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'signal_type': signal_type,
-                'confidence': confidence,
-                'confidence_grade': get_confidence_grade(confidence),
+                'confidence': adjusted_confidence,
+                'raw_confidence': raw_confidence,
+                'confidence_grade': get_confidence_grade(adjusted_confidence),
                 'leverage': leverage,
                 'timestamp': datetime.now(),
                 'current_price': df['close'].iloc[-1],
+                'market_volatility': market_volatility,
                 'rsi': df['rsi'].iloc[-1],
                 'macd': df['macd'].iloc[-1],
                 'atr': df['atr'].iloc[-1],
                 'volume_ratio': df['volume_ratio'].iloc[-1],
                 **sl_tp_data
             }
-            
+
             # Store signal timestamp
             self.last_signals[signal_key] = datetime.now()
-            
-            logger.info(f"Signal generated: {symbol} {timeframe} {signal_type} {confidence:.1f}%")
+
+            logger.info(f"✅ Signal generated: {symbol} {timeframe} {signal_type} {adjusted_confidence:.1f}% (volatility: {market_volatility:.4f})")
             return signal
-            
+
         except Exception as e:
             logger.error(f"Error generating signal for {symbol} {timeframe}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     def scan_all_symbols(self) -> List[Dict]:
@@ -396,6 +435,98 @@ class StrategyAI:
             'features': self.feature_columns,
             'last_prediction': datetime.now()
         }
+
+    def get_market_volatility(self, symbol: str = 'BTCUSDT', days: int = 7) -> float:
+        """Get current market volatility"""
+        try:
+            df = self.get_binance_data(symbol, '1d', limit=days)
+            if df.empty or len(df) < 3:
+                return 0.05  # Default moderate volatility
+            
+            # Calculate ATR-based volatility
+            atr = ta.volatility.AverageTrueRange(
+                df['high'], df['low'], df['close'], window=min(len(df)-1, 7)
+            ).average_true_range()
+            
+            avg_price = df['close'].mean()
+            volatility = atr.iloc[-1] / avg_price if avg_price > 0 else 0.05
+            
+            logger.info(f"Market volatility ({symbol}): {volatility:.4f}")
+            return volatility
+            
+        except Exception as e:
+            logger.error(f"Error calculating market volatility: {e}")
+            return 0.05
+
+    def adjust_confidence_for_market(self, confidence: float) -> float:
+        """Adjust confidence threshold based on current market conditions"""
+        try:
+            # Get current market volatility
+            volatility = self.get_market_volatility()
+            
+            # Adjust confidence for low volatility markets
+            if volatility < MARKET_CONDITIONS['low_volatility_threshold']:
+                adjusted_confidence = confidence * MARKET_CONDITIONS['confidence_adjustment']
+                logger.info(f"Low volatility detected ({volatility:.4f}), adjusting confidence: {confidence:.1f}% -> {adjusted_confidence:.1f}%")
+                return adjusted_confidence
+            
+            return confidence
+            
+        except Exception as e:
+            logger.error(f"Error adjusting confidence: {e}")
+            return confidence
+
+    def debug_signal_generation(self) -> Dict:
+        """Debug signal generation process"""
+        debug_info = {
+            'model_loaded': self.model is not None,
+            'feature_columns': len(self.feature_columns) if self.feature_columns else 0,
+            'last_signals_count': len(self.last_signals),
+            'market_volatility': self.get_market_volatility(),
+            'symbol_analysis': {}
+        }
+        
+        # Test top 3 symbols
+        test_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+        
+        for symbol in test_symbols:
+            symbol_debug = {}
+            
+            for timeframe in ['1h', '4h']:
+                try:
+                    # Test data fetching
+                    df = self.get_binance_data(symbol, timeframe, limit=100)
+                    symbol_debug[timeframe] = {
+                        'data_length': len(df),
+                        'data_available': not df.empty,
+                        'latest_price': df['close'].iloc[-1] if not df.empty else None,
+                    }
+                    
+                    if not df.empty and len(df) >= 50:
+                        # Test indicator calculation
+                        df_with_indicators = self.calculate_technical_indicators(df)
+                        symbol_debug[timeframe]['indicators_calculated'] = True
+                        symbol_debug[timeframe]['rsi'] = df_with_indicators['rsi'].iloc[-1] if 'rsi' in df_with_indicators else None
+                        
+                        # Test feature preparation
+                        features = self.prepare_features(df_with_indicators)
+                        symbol_debug[timeframe]['features_prepared'] = features.size > 0
+                        
+                        if features.size > 0 and self.model:
+                            # Test model prediction
+                            prediction = self.model.predict(features)[0]
+                            probabilities = self.model.predict_proba(features)[0]
+                            
+                            symbol_debug[timeframe]['model_prediction'] = prediction
+                            symbol_debug[timeframe]['raw_confidence'] = max(probabilities) * 100
+                            symbol_debug[timeframe]['adjusted_confidence'] = self.adjust_confidence_for_market(max(probabilities) * 100)
+                    
+                except Exception as e:
+                    symbol_debug[timeframe] = {'error': str(e)}
+            
+            debug_info['symbol_analysis'][symbol] = symbol_debug
+        
+        return debug_info
 
 # Global strategy instance
 strategy_ai = StrategyAI()

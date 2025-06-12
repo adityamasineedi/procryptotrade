@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
-from config import *
+from config import MARKET_CONDITIONS, SYMBOLS, TIMEFRAMES, RISK_PER_TRADE, CAPITAL, LOGGING_CONFIG, SCHEDULER_CONFIG, validate_config
 from strategy_ai import strategy_ai
 from notifier import telegram_notifier
 
@@ -155,33 +155,68 @@ class ProTradeAIBot:
         return True
     
     def quick_market_scan(self):
-        """Quick market scan (every 5 minutes during active hours)"""
+        """Enhanced quick market scan with debug info"""
         try:
             if self.is_shutdown_period:
                 logger.info("Skipping quick scan - in shutdown period")
                 return
+
+            logger.info("🔍 Starting enhanced quick market scan...")
             
-            logger.info("Starting quick market scan...")
+            # Check market conditions first
+            market_volatility = strategy_ai.get_market_volatility()
+            logger.info(f"📊 Current market volatility: {market_volatility:.4f}")
             
-            # Quick scan of top 3 symbols only
-            quick_symbols = SYMBOLS[:3]  # BTC, ETH, BNB
+            # Adapt scan based on market conditions
+            if market_volatility < MARKET_CONDITIONS['low_volatility_threshold']:
+                scan_symbols = SYMBOLS[:5]  # Focus on top 5 in low volatility
+                scan_timeframes = ['4h', '1d']  # Higher timeframes only
+                logger.info("🌙 Low volatility detected - using conservative scan")
+            else:
+                scan_symbols = SYMBOLS[:3]
+                scan_timeframes = ['1h', '4h']
+                logger.info("⚡ Normal volatility - using standard scan")
+
             signals = []
+            processed_pairs = 0
             
-            for symbol in quick_symbols:
-                for timeframe in ['1h', '4h']:  # Only check shorter timeframes
-                    signal = strategy_ai.predict_signal(symbol, timeframe)
-                    if signal:
-                        signals.append(signal)
-            
+            for symbol in scan_symbols:
+                for timeframe in scan_timeframes:
+                    try:
+                        processed_pairs += 1
+                        logger.info(f"🔎 Scanning {symbol} {timeframe} ({processed_pairs}/{len(scan_symbols)*len(scan_timeframes)})")
+                        
+                        signal = strategy_ai.predict_signal(symbol, timeframe)
+                        if signal:
+                            signals.append(signal)
+                            logger.info(f"✅ Signal found: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
+                        else:
+                            logger.debug(f"❌ No signal: {symbol} {timeframe}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error scanning {symbol} {timeframe}: {e}")
+
             if signals:
-                logger.info(f"Quick scan generated {len(signals)} signals")
+                logger.info(f"🎯 Quick scan generated {len(signals)} signals")
                 for signal in signals:
                     self.process_signal(signal)
             else:
-                logger.info("Quick scan: No signals generated")
+                logger.info("📭 Quick scan: No signals generated")
                 
+                # If no signals in multiple scans, run debug
+                if not hasattr(self, '_last_debug_time'):
+                    self._last_debug_time = datetime.now()
+                
+                time_since_debug = datetime.now() - self._last_debug_time
+                if time_since_debug > timedelta(hours=2):  # Debug every 2 hours if no signals
+                    logger.info("🔧 Running signal generation debug...")
+                    self.debug_no_signals()
+                    self._last_debug_time = datetime.now()
+
         except Exception as e:
-            logger.error(f"Error in quick market scan: {e}")
+            logger.error(f"Error in enhanced quick market scan: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
     
     def full_market_scan(self):
         """Full market scan (every 15 minutes during active hours)"""
@@ -460,9 +495,9 @@ class ProTradeAIBot:
             
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
             logger.info(f"📊 Monitoring {len(SYMBOLS)} symbols on {len(TIMEFRAMES)} timeframes")
-            logger.info(f"⚡ Quick scans every 5 minutes")
-            logger.info(f"🔍 Full scans every 15 minutes (cron)")
-            logger.info(f"🌙 Auto shutdown: 1-5 AM IST")
+            logger.info("⚡ Quick scans every 5 minutes")
+            logger.info("🔍 Full scans every 15 minutes (cron)")
+            logger.info("🌙 Auto shutdown: 1-5 AM IST")
             logger.info(f"💰 Risk per trade: {RISK_PER_TRADE*100:.1f}% of ${CAPITAL:,.2f}")
             
             # Send startup notification
@@ -527,6 +562,49 @@ class ProTradeAIBot:
             logger.info("Keyboard interrupt received")
         finally:
             self.stop()
+
+    def debug_no_signals(self):
+        """Debug why no signals are being generated"""
+        logger.info("🔍 Starting signal generation debug...")
+        
+        try:
+            # Get debug info from strategy
+            debug_info = strategy_ai.debug_signal_generation()
+            
+            logger.info("🤖 Model Status:")
+            logger.info(f"  - Model loaded: {debug_info['model_loaded']}")
+            logger.info(f"  - Feature columns: {debug_info['feature_columns']}")
+            logger.info(f"  - Recent signals: {debug_info['last_signals_count']}")
+            logger.info(f"  - Market volatility: {debug_info['market_volatility']:.4f}")
+            
+            logger.info("📊 Symbol Analysis:")
+            for symbol, analysis in debug_info['symbol_analysis'].items():
+                logger.info(f"  {symbol}:")
+                for timeframe, data in analysis.items():
+                    if 'error' in data:
+                        logger.error(f"    {timeframe}: ERROR - {data['error']}")
+                    else:
+                        logger.info(f"    {timeframe}: Data={data.get('data_available', False)}, "
+                                    f"Length={data.get('data_length', 0)}, "
+                                    f"Prediction={data.get('model_prediction', 'N/A')}, "
+                                    f"Confidence={data.get('adjusted_confidence', 0):.1f}%")
+            
+            # Check if we should force a signal generation test
+            logger.info("🧪 Testing forced signal generation...")
+            test_signal = strategy_ai.predict_signal('BTCUSDT', '4h')
+            
+            if test_signal:
+                logger.info(f"✅ Test signal generated: {test_signal['symbol']} {test_signal['signal_type']} {test_signal['confidence']:.1f}%")
+            else:
+                logger.warning("❌ No test signal generated")
+                
+            return debug_info
+            
+        except Exception as e:
+            logger.error(f"Error in debug process: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
 
 def main():
     """Main entry point"""

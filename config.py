@@ -43,14 +43,14 @@ MAX_DAILY_TRADES = int(os.getenv('MAX_DAILY_TRADES', '8'))
 
 SCHEDULER_CONFIG = {
     # Scanning intervals
-    'quick_scan_interval': 5,       # Minutes - Quick scan every 5 minutes
-    'full_scan_interval': 15,       # Minutes - Full scan every 15 minutes (cron)
+    'quick_scan_interval': 3,       # Minutes - Quick scan every 3 minutes
+    'full_scan_interval': 10,       # Minutes - Full scan every 10 minutes (cron)
     'health_check_interval': 10,    # Minutes - Health check every 10 minutes
     'shutdown_check_interval': 5,   # Minutes - Check shutdown status every 5 minutes
     'cleanup_interval': 60,         # Minutes - Cleanup every hour
     
     # Auto shutdown settings
-    'auto_shutdown_enabled': True,
+    'auto_shutdown_enabled': False,
     'shutdown_start_hour': 1,       # 1 AM IST
     'shutdown_end_hour': 5,         # 5 AM IST
     'shutdown_timezone': 'Asia/Kolkata',  # IST
@@ -170,13 +170,25 @@ INDICATOR_PARAMS = {
 }
 
 # ============================================================================
-# CONFIDENCE AND SIGNAL THRESHOLDS
+# CONFIDENCE AND SIGNAL THRESHOLDS (EMERGENCY LOW VOLATILITY SETTINGS)
 # ============================================================================
 
 CONFIDENCE_THRESHOLDS = {
-    'MIN_SIGNAL': 70,      # Minimum confidence to generate signal
-    'HIGH_CONFIDENCE': 85, # High confidence threshold
-    'MAX_CONFIDENCE': 95,  # Maximum confidence cap
+    'MIN_SIGNAL': 60,      # Reduced from 70 for low volatility market
+    'HIGH_CONFIDENCE': 75, # Reduced from 85 
+    'MAX_CONFIDENCE': 90,  # Reduced from 95
+}
+
+# ============================================================================
+# Market condition adaptation settings
+# ============================================================================
+
+MARKET_CONDITIONS = {
+    'low_volatility_threshold': 0.03,  # 3% volatility threshold
+    'confidence_adjustment': 0.85,     # 15% reduction in low volatility
+    'min_signals_per_day': 2,          # Minimum expected signals
+    'max_signals_per_day': 15,         # Maximum signals
+    'cooldown_reduction_factor': 0.5,  # Reduce cooldowns in low volatility
 }
 
 def get_confidence_grade(confidence: float) -> str:
@@ -195,27 +207,22 @@ def get_confidence_grade(confidence: float) -> str:
         return 'D'
 
 # ============================================================================
-# LEVERAGE CONFIGURATION
+# INCREASE TRADING FREQUENCY
 # ============================================================================
 
-DEFAULT_LEVERAGE_MODE = os.getenv('LEVERAGE_MODE', 'moderate')
+MAX_DAILY_TRADES = 15  # Increased from 8
+RISK_PER_TRADE = 0.015  # Slightly lower risk per trade (1.5% instead of 2%)
+
+# ============================================================================
+# MORE AGGRESSIVE LEVERAGE  
+# ============================================================================
+
+DEFAULT_LEVERAGE_MODE = 'moderate'  # or 'aggressive' for higher leverage
 
 LEVERAGE_CONFIG = {
-    'conservative': {
-        'min': 2,
-        'max': 3,
-        'description': 'Low risk, stable returns'
-    },
-    'moderate': {
-        'min': 3,
-        'max': 5,
-        'description': 'Balanced risk/reward'
-    },
-    'aggressive': {
-        'min': 5,
-        'max': 10,
-        'description': 'High risk, high reward'
-    }
+    'conservative': {'min': 2, 'max': 4},   # Increased
+    'moderate': {'min': 3, 'max': 7},       # Increased  
+    'aggressive': {'min': 5, 'max': 12}     # Increased
 }
 
 def get_leverage_range(mode: str = None) -> dict:
