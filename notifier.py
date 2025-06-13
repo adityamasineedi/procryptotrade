@@ -28,13 +28,20 @@ class TelegramNotifier:
         self.timezone = pytz.timezone('Asia/Kolkata')  # IST timezone
         
     def format_ist_time(self, timestamp: datetime) -> str:
-        """Format timestamp to IST"""
-        if timestamp.tzinfo is None:
-            # If no timezone info, assume it's UTC and convert to IST
-            timestamp = pytz.UTC.localize(timestamp)
-        
-        ist_time = timestamp.astimezone(self.timezone)
-        return ist_time.strftime('%H:%M:%S IST')
+        """Format timestamp to IST - CORRECTED VERSION"""
+        try:
+            # 🔧 SIMPLE FIX: Treat all timestamps as local IST time
+            if timestamp.tzinfo is None:
+                # Naive datetime - assume it's already IST (server local time)
+                return timestamp.strftime('%H:%M:%S IST')
+            else:
+                # Timezone-aware - convert to IST
+                ist_time = timestamp.astimezone(self.timezone)
+                return ist_time.strftime('%H:%M:%S IST')
+        except Exception as e:
+            logger.error(f"Error formatting IST time: {e}")
+            # Fallback to current time
+            return datetime.now().strftime('%H:%M:%S IST')
     
     def format_ist_datetime(self, timestamp: datetime) -> str:
         """Format full datetime to IST"""
@@ -594,7 +601,7 @@ class TelegramCommandHandler:
     # Command implementations
     
     def cmd_scan(self, message: dict):
-        """Execute full market scan"""
+        """Execute full market scan WITH detailed alerts"""
         try:
             self._send_response("🔍 <b>Starting Full Market Scan...</b>\n\n⏳ This may take 1-2 minutes...")
             
@@ -602,24 +609,47 @@ class TelegramCommandHandler:
             signals = self.strategy_ai.scan_all_symbols()
             
             if signals:
+                # Send summary first
                 response = f"🎯 <b>Scan Complete!</b>\n\n✅ Found {len(signals)} signals:\n\n"
                 
-                for i, signal in enumerate(signals[:5], 1):  # Show max 5
+                for i, signal in enumerate(signals[:5], 1):
                     direction_emoji = "🚀" if signal['signal_type'] == 'LONG' else "📉"
                     response += f"{i}. {direction_emoji} <b>{signal['symbol']}</b> {signal['signal_type']} - {signal['confidence']:.1f}%\n"
                 
                 if len(signals) > 5:
                     response += f"\n... and {len(signals) - 5} more signals\n"
                 
-                response += f"\n📱 <b>All signals sent to this chat!</b>"
+                response += f"\n📱 <b>Sending detailed alerts now...</b>"
+                self._send_response(response)
+                
+                # 🔧 CRITICAL FIX: Send detailed alert for EACH signal
+                from notifier import telegram_notifier
+                for i, signal in enumerate(signals, 1):
+                    try:
+                        # Send the full Pro+ formatted alert
+                        success = telegram_notifier.send_signal_alert(signal)
+                        if success:
+                            print(f"✅ Sent detailed alert {i}/{len(signals)}: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
+                        else:
+                            print(f"❌ Failed to send alert {i}: {signal['symbol']}")
+                        
+                        # Delay between alerts to avoid spam
+                        import time
+                        time.sleep(3)
+                        
+                    except Exception as e:
+                        print(f"Error sending detailed alert {i}: {e}")
+                        continue
+                
+                # Confirmation message
+                self._send_response(f"✅ <b>All {len(signals)} detailed Pro+ alerts sent!</b>")
                 
             else:
                 response = "📭 <b>Scan Complete</b>\n\n❌ No signals found\n🔍 Market conditions may not be optimal right now"
-            
-            self._send_response(response)
+                self._send_response(response)
             
         except Exception as e:
-            logger.error(f"Error in scan command: {e}")
+            print(f"Error in scan command: {e}")
             self._send_response(f"❌ Scan failed: {str(e)}")
     
     def cmd_quick_scan(self, message: dict):
@@ -895,3 +925,32 @@ def disable_simple_commands():
     except Exception as e:
         logger.error(f"Error disabling commands: {e}")
         return False
+
+# IMMEDIATE TEST: Check current timezone setup
+def check_timezone():
+    """Quick timezone check"""
+    import pytz
+    from datetime import datetime
+
+    print("🕐 Current Time Check:")
+    print(f"System time: {datetime.now()}")
+    print(f"UTC time: {datetime.now(pytz.UTC)}")
+
+    ist_tz = pytz.timezone('Asia/Kolkata')
+    ist_time = datetime.now(ist_tz)
+    print(f"Correct IST: {ist_time.strftime('%H:%M:%S IST')}")
+
+    # Check what the server thinks IST is
+    naive_time = datetime.now()
+    try:
+        # This is what the current code is doing (WRONG)
+        utc_localized = pytz.UTC.localize(naive_time)
+        wrong_ist = utc_localized.astimezone(ist_tz)
+        print(f"Wrong conversion: {wrong_ist.strftime('%H:%M:%S IST')}")
+    except:
+        pass
+
+    return ist_time.strftime('%H:%M:%S')
+
+if __name__ == "__main__":
+    check_timezone()

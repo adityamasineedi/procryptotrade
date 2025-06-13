@@ -29,6 +29,7 @@ import json
 import time
 from collections import deque
 from threading import Lock
+import pytz
 
 warnings.filterwarnings('ignore')
 
@@ -882,7 +883,7 @@ class StrategyAI:
                 'confidence': confidence,
                 'confidence_grade': get_confidence_grade(confidence),
                 'leverage': leverage,
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(ist_timezone),
                 'current_price': price,
                 'rsi': rsi,
                 'macd': df.get('macd', [0]).iloc[-1] if not df.empty else 0,
@@ -978,7 +979,7 @@ class StrategyAI:
                 'confidence': confidence,
                 'confidence_grade': get_confidence_grade(confidence),
                 'leverage': leverage,
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(ist_timezone),
                 'current_price': df['close'].iloc[-1],
                 'rsi': df['rsi'].iloc[-1],
                 'macd': df['macd'].iloc[-1],
@@ -1239,7 +1240,7 @@ class StrategyAI:
                     'confidence': confidence,
                     'confidence_grade': get_confidence_grade(confidence),
                     'leverage': leverage,
-                    'timestamp': datetime.now(),
+                    'timestamp': datetime.now(ist_timezone),
                     'current_price': current_price,
                     'market_regime': 'SIDEWAYS',
                     'strategy_type': f'RANGE_{signal_type}',
@@ -1328,7 +1329,7 @@ class StrategyAI:
                 'confidence': base_confidence,
                 'confidence_grade': get_confidence_grade(base_confidence),
                 'leverage': leverage,
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(ist_timezone),
                 'current_price': df['close'].iloc[-1],
                 'market_regime': market_regime,
                 'strategy_type': f'{market_regime}_{signal_type}',
@@ -1428,3 +1429,5 @@ class StrategyAI:
 
 # Global strategy instance
 strategy_ai = StrategyAI()
+
+ist_timezone = pytz.timezone('Asia/Kolkata')

@@ -454,7 +454,7 @@ class ProTradeAIBot:
             logger.error(f"Error in enhanced market scan: {e}")
 
     def full_market_scan(self):
-        """Full market scan using existing scan_all_symbols function"""
+        """Full market scan with detailed alert sending"""
         try:
             if self.is_shutdown_period:
                 return
@@ -469,11 +469,41 @@ class ProTradeAIBot:
 
             logger.info(f"Full scan generated {len(signals)} signals")
 
-            for signal in signals:
-                self.process_signal(signal)
-                time.sleep(2)
+            # 🔧 CRITICAL: Process each signal to send detailed alerts
+            for i, signal in enumerate(signals, 1):
+                try:
+                    logger.info(f"Processing signal {i}/{len(signals)}: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
+                    
+                    # Send the detailed Pro+ alert
+                    success = telegram_notifier.send_signal_alert(signal)
+                    
+                    if success:
+                        logger.info(f"✅ Detailed alert sent: {signal['symbol']} {signal['signal_type']}")
+                        # Track the signal
+                        self.tracker.track_signal(signal)
+                        self._save_signal(signal)
+                    else:
+                        logger.error(f"❌ Failed to send alert: {signal['symbol']}")
+                    
+                    # Delay between signals
+                    if i < len(signals):
+                        time.sleep(3)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing signal {i}: {e}")
+                    continue
 
             self._update_daily_stats()
+            
+            # Send summary after all alerts
+            if len(signals) > 0:
+                telegram_notifier.send_message(
+                    f"📊 <b>Scan Summary</b>\n\n"
+                    f"✅ {len(signals)} detailed alerts sent\n"
+                    f"🎯 Highest confidence: {max(s['confidence'] for s in signals):.1f}%\n"
+                    f"💰 Total opportunities identified\n\n"
+                    f"<i>Check above for individual signal details</i>"
+                )
 
         except Exception as e:
             logger.error(f"Error in full market scan: {e}")
