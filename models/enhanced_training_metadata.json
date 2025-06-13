@@ -1,0 +1,25 @@
+{
+  "training_date": "2025-06-12T14:51:22.144771",
+  "training_type": "enhanced_production",
+  "training_days": 180,
+  "total_samples": 16000,
+  "features": 15,
+  "train_accuracy": 0.77703125,
+  "validation_accuracy": 0.744375,
+  "symbols_used": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "ADAUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOTUSDT",
+    "LINKUSDT"
+  ],
+  "timeframes_used": [
+    "1h",
+    "4h",
+    "1d"
+  ],
+  "strategy_class": "StrategyAI"
+}
