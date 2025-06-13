@@ -1,6 +1,6 @@
 """
-ProTradeAI Pro+ Main Application - FIXED VERSION
-Stops continuous restart notifications while maintaining full compatibility
+ProTradeAI Pro+ Main Application - RESTART LOOP FIXED
+Prevents continuous restart notifications and stabilizes bot operation
 """
 
 import os
@@ -183,11 +183,13 @@ class ProTradeAIBot:
 
         # Initialize data storage FIRST
         self.data_dir = Path("data")
-        self.data_dir.mkdir(exist_ok=True)  # Create directory before using it
+        self.data_dir.mkdir(exist_ok=True)
 
-        # 🔧 FIX: Create notification state file path AFTER data dir exists
-        self.notification_state_file = self.data_dir / "notification_state.json"
-        self.load_notification_state()
+        # 🔧 FIX: Simplified notification state (STOP RESTART LOOP)
+        self.notification_state_file = self.data_dir / "simple_state.json"
+        self.last_startup_today = None
+        self.startup_count_today = 0
+        self.load_simple_state()
 
         self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
         self.scan_count = 0
@@ -211,69 +213,46 @@ class ProTradeAIBot:
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Aggressive scanning enabled")
 
-    def load_notification_state(self):
-        """🔧 FIX: Load notification state to prevent spam"""
+    def load_simple_state(self):
+        """🔧 SIMPLIFIED: Load basic state to prevent spam"""
         try:
             if self.notification_state_file.exists():
                 with open(self.notification_state_file, 'r') as f:
                     state = json.load(f)
-                    self.last_startup_notification = state.get('last_startup_notification')
-                    self.last_shutdown_notification = state.get('last_shutdown_notification')
-                    self.last_resume_notification = state.get('last_resume_notification')
+                    self.last_startup_today = state.get('last_startup_today')
                     self.startup_count_today = state.get('startup_count_today', 0)
-                    self.last_startup_date = state.get('last_startup_date')
             else:
-                self.last_startup_notification = None
-                self.last_shutdown_notification = None
-                self.last_resume_notification = None
+                self.last_startup_today = None
                 self.startup_count_today = 0
-                self.last_startup_date = None
         except Exception as e:
-            logger.error(f"Error loading notification state: {e}")
-            self.last_startup_notification = None
-            self.last_shutdown_notification = None
-            self.last_resume_notification = None
+            logger.error(f"Error loading state: {e}")
+            self.last_startup_today = None
             self.startup_count_today = 0
-            self.last_startup_date = None
 
-    def save_notification_state(self):
-        """🔧 FIX: Save notification state"""
+    def save_simple_state(self):
+        """🔧 SIMPLIFIED: Save basic state"""
         try:
             state = {
-                'last_startup_notification': self.last_startup_notification,
-                'last_shutdown_notification': self.last_shutdown_notification,
-                'last_resume_notification': self.last_resume_notification,
-                'startup_count_today': self.startup_count_today,
-                'last_startup_date': self.last_startup_date
+                'last_startup_today': self.last_startup_today,
+                'startup_count_today': self.startup_count_today
             }
             with open(self.notification_state_file, 'w') as f:
                 json.dump(state, f, indent=2)
         except Exception as e:
-            logger.error(f"Error saving notification state: {e}")
+            logger.error(f"Error saving state: {e}")
 
     def should_send_startup_notification(self) -> bool:
-        """🔧 FIX: Check if we should send startup notification"""
+        """🔧 SIMPLIFIED: Only send startup notification once per day"""
         try:
             today = datetime.now().strftime('%Y-%m-%d')
             
-            # Reset daily count if new day
-            if self.last_startup_date != today:
-                self.startup_count_today = 0
-                self.last_startup_date = today
-            
-            # Don't spam - max 3 startup notifications per day
-            if self.startup_count_today >= 3:
-                return False
-            
-            # Don't send if we sent one in the last 30 minutes
-            if self.last_startup_notification:
-                last_time = datetime.fromisoformat(self.last_startup_notification)
-                if datetime.now() - last_time < timedelta(minutes=30):
-                    return False
+            # Only send ONE notification per day
+            if self.last_startup_today == today:
+                return False  # Already sent today
             
             return True
         except Exception:
-            return True  # Default to allowing if check fails
+            return True
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -295,7 +274,7 @@ class ProTradeAIBot:
             return False
 
     def check_shutdown_status(self):
-        """🔧 FIX: Check shutdown status with reduced notifications"""
+        """🔧 SIMPLIFIED: Check shutdown with reduced notifications"""
         try:
             should_shutdown = self.is_shutdown_time()
 
@@ -307,24 +286,13 @@ class ProTradeAIBot:
                 for job in self.scheduler.get_jobs():
                     if job.id in ["signal_scan", "quick_scan"]:
                         job.pause()
-                        logger.info(f"Paused job: {job.id}")
 
-                # 🔧 FIX: Only send shutdown notification once per shutdown period
-                if (not self.last_shutdown_notification or 
-                    datetime.now() - datetime.fromisoformat(self.last_shutdown_notification) > timedelta(hours=8)):
-                    
-                    today_stats = self.tracker.get_today_stats()
-                    telegram_notifier.send_message(
-                        "🌙 <b>Maintenance Period Started</b>\n\n"
-                        "🔸 Signal scanning paused (1-5 AM IST)\n"
-                        "🔸 System monitoring continues\n"
-                        f"📊 Today's signals: {today_stats['total_signals']}\n"
-                        f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
-                        "🔸 Bot will resume automatically at 5 AM IST\n\n"
-                        "<i>Good night! 😴</i>"
-                    )
-                    self.last_shutdown_notification = datetime.now().isoformat()
-                    self.save_notification_state()
+                # Send simple shutdown message (once per shutdown)
+                telegram_notifier.send_message(
+                    "🌙 <b>Maintenance Period</b>\n\n"
+                    "Signal scanning paused (1-5 AM IST)\n"
+                    "Will resume automatically at 5 AM"
+                )
 
             elif not should_shutdown and self.is_shutdown_period:
                 logger.info("☀️ Exiting maintenance shutdown period")
@@ -334,27 +302,19 @@ class ProTradeAIBot:
                 for job in self.scheduler.get_jobs():
                     if job.id in ["signal_scan", "quick_scan"]:
                         job.resume()
-                        logger.info(f"Resumed job: {job.id}")
 
-                # 🔧 FIX: Only send resume notification once per resume
-                if (not self.last_resume_notification or 
-                    datetime.now() - datetime.fromisoformat(self.last_resume_notification) > timedelta(hours=8)):
-                    
-                    telegram_notifier.send_message(
-                        "☀️ <b>Trading Resumed</b>\n\n"
-                        "✅ Signal scanning reactivated\n"
-                        "🔸 All systems operational\n"
-                        "🔸 Ready for new trading opportunities\n\n"
-                        "<i>Good morning! Let's trade! 🚀</i>"
-                    )
-                    self.last_resume_notification = datetime.now().isoformat()
-                    self.save_notification_state()
+                # Send simple resume message
+                telegram_notifier.send_message(
+                    "☀️ <b>Trading Resumed</b>\n\n"
+                    "Signal scanning reactivated\n"
+                    "Ready for trading opportunities!"
+                )
 
         except Exception as e:
             logger.error(f"Error in shutdown status check: {e}")
 
     def validate_configuration(self) -> bool:
-        """🔧 FIX: Validate config without testing Telegram every time"""
+        """🔧 SIMPLIFIED: Quick validation without testing every time"""
         logger.info("Validating configuration...")
 
         # Check config
@@ -364,22 +324,7 @@ class ProTradeAIBot:
                 logger.error(f"Configuration error: {error}")
             return False
 
-        # 🔧 FIX: Only test Telegram connection on first validation of the day
-        test_telegram = True
-        if hasattr(self, 'last_telegram_test'):
-            last_test = datetime.fromisoformat(self.last_telegram_test)
-            if datetime.now() - last_test < timedelta(hours=6):
-                test_telegram = False
-
-        if test_telegram:
-            logger.info("Testing Telegram connection...")
-            if telegram_notifier.test_connection():
-                self.last_telegram_test = datetime.now().isoformat()
-            else:
-                logger.error("Telegram connection test failed")
-                return False
-
-        # Check AI model
+        # Check AI model (don't test Telegram every time)
         logger.info("Checking AI model...")
         try:
             model_info = strategy_ai.get_model_info()
@@ -409,15 +354,15 @@ class ProTradeAIBot:
             return 0.05
 
     def quick_market_scan(self):
-        """🔧 FIX: Enhanced market scan with reduced logging"""
+        """🔧 ENHANCED: Quick scan with better logging"""
         try:
             if self.is_shutdown_period:
                 return
 
             self.scan_count += 1
 
-            # 🔧 FIX: Much less verbose logging
-            if self.scan_count % 20 == 0:  # Log every 20th scan instead of every scan
+            # Less verbose logging
+            if self.scan_count % 30 == 0:  # Log every 30th scan
                 logger.info(f"🔍 Quick scan #{self.scan_count}")
 
             # Check market conditions
@@ -446,15 +391,15 @@ class ProTradeAIBot:
 
             # Process signals
             if signals:
-                logger.info(f"🎯 Market scan generated {len(signals)} signals")
+                logger.info(f"🎯 Quick scan generated {len(signals)} signals")
                 for signal in signals:
                     self.process_signal(signal)
 
         except Exception as e:
-            logger.error(f"Error in enhanced market scan: {e}")
+            logger.error(f"Error in quick market scan: {e}")
 
     def full_market_scan(self):
-        """Full market scan with detailed alert sending"""
+        """🔧 ENHANCED: Full scan with better signal processing"""
         try:
             if self.is_shutdown_period:
                 return
@@ -469,25 +414,25 @@ class ProTradeAIBot:
 
             logger.info(f"Full scan generated {len(signals)} signals")
 
-            # 🔧 CRITICAL: Process each signal to send detailed alerts
+            # Process each signal to send detailed alerts
             for i, signal in enumerate(signals, 1):
                 try:
                     logger.info(f"Processing signal {i}/{len(signals)}: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%")
                     
-                    # Send the detailed Pro+ alert
+                    # Send the detailed alert
                     success = telegram_notifier.send_signal_alert(signal)
                     
                     if success:
-                        logger.info(f"✅ Detailed alert sent: {signal['symbol']} {signal['signal_type']}")
+                        logger.info(f"✅ Alert sent: {signal['symbol']} {signal['signal_type']}")
                         # Track the signal
                         self.tracker.track_signal(signal)
                         self._save_signal(signal)
                     else:
                         logger.error(f"❌ Failed to send alert: {signal['symbol']}")
                     
-                    # Delay between signals
+                    # Delay between signals to avoid rate limits
                     if i < len(signals):
-                        time.sleep(3)
+                        time.sleep(2)  # Reduced from 3 seconds
                         
                 except Exception as e:
                     logger.error(f"Error processing signal {i}: {e}")
@@ -499,19 +444,14 @@ class ProTradeAIBot:
             if len(signals) > 0:
                 telegram_notifier.send_message(
                     f"📊 <b>Scan Summary</b>\n\n"
-                    f"✅ {len(signals)} detailed alerts sent\n"
+                    f"✅ {len(signals)} alerts sent\n"
                     f"🎯 Highest confidence: {max(s['confidence'] for s in signals):.1f}%\n"
-                    f"💰 Total opportunities identified\n\n"
-                    f"<i>Check above for individual signal details</i>"
+                    f"💰 Opportunities identified\n\n"
+                    f"<i>Check above for details</i>"
                 )
 
         except Exception as e:
             logger.error(f"Error in full market scan: {e}")
-            # 🔧 FIX: Only send error alert once per hour
-            if (not hasattr(self, 'last_scan_error_alert') or 
-                datetime.now() - self.last_scan_error_alert > timedelta(hours=1)):
-                telegram_notifier.send_error_alert(str(e), "Full Market Scanner")
-                self.last_scan_error_alert = datetime.now()
 
     def process_signal(self, signal: Dict):
         """Process and send a trading signal"""
@@ -534,64 +474,23 @@ class ProTradeAIBot:
             logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
 
     def enhanced_health_check(self):
-        """🔧 IMPROVED: Enhanced health check with safe config imports"""
+        """🔧 SIMPLIFIED: Basic health check without complex monitoring"""
         try:
-            # Safe import of psutil
+            # Simple memory check (optional)
             try:
                 import psutil
-                process = psutil.Process()
-                memory_mb = process.memory_info().rss / 1024 / 1024
-                cpu_percent = process.cpu_percent()
+                memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+                if memory_mb > 500:  # 500MB limit
+                    logger.warning(f"High memory usage: {memory_mb:.1f}MB")
             except ImportError:
-                logger.warning("psutil not available, skipping system monitoring")
-                return
-            except Exception as e:
-                logger.error(f"Error getting system stats: {e}")
-                return
-
-            # Safe import of config values with defaults
-            try:
-                from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
-                max_memory = PRODUCTION_LIMITS.get('max_memory_mb', 500)
-                alert_hours = SYSTEM_MONITORING.get('alert_on_no_signals_hours', 6)
-            except (ImportError, AttributeError):
-                # Use defaults if config values don't exist
-                max_memory = 500
-                alert_hours = 6
-                logger.debug("Using default monitoring thresholds")
-
-            # Memory monitoring with safe thresholds
-            if memory_mb > max_memory:
-                if (not hasattr(self, 'last_memory_alert') or
-                    datetime.now() - self.last_memory_alert > timedelta(hours=24)):
-                    telegram_notifier.send_error_alert(
-                        f"High memory usage: {memory_mb:.1f}MB (limit: {max_memory}MB)",
-                        "System Monitor"
-                    )
-                    self.last_memory_alert = datetime.now()
-
-            # CPU monitoring (optional alert)
-            if cpu_percent > 85:
-                logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
-
-            # Check for no signals alert - only once per 6 hours
-            if hasattr(self, 'last_signal_time') and self.last_signal_time:
-                hours_since_signal = (datetime.now() - self.last_signal_time).total_seconds() / 3600
-                if (hours_since_signal > alert_hours and
-                    (not hasattr(self, 'last_no_signal_alert') or
-                     datetime.now() - self.last_no_signal_alert > timedelta(hours=6))):
-                    telegram_notifier.send_error_alert(
-                        f"No signals generated for {hours_since_signal:.1f} hours",
-                        "Signal Generator"
-                    )
-                    self.last_no_signal_alert = datetime.now()
+                pass  # Skip if psutil not available
 
             # Log health status occasionally
-            if self.scan_count % 120 == 0:  # Every 2 hours (120 scans * 1min)
-                logger.info(f"Health check: Memory {memory_mb:.1f}MB, CPU {cpu_percent:.1f}%")
+            if self.scan_count % 240 == 0:  # Every 4 hours
+                logger.info(f"Health check: {self.scan_count} scans completed, system running")
 
         except Exception as e:
-            logger.error(f"Error in enhanced health check: {e}")
+            logger.error(f"Error in health check: {e}")
 
     def _save_signal(self, signal: Dict):
         """Save signal to JSON file"""
@@ -693,7 +592,7 @@ class ProTradeAIBot:
         }
 
     def start(self):
-        """🔧 FIX: Start bot with controlled notifications"""
+        """🔧 FIXED: Start bot with SINGLE startup notification per day"""
         try:
             logger.info("Starting ProTradeAI Pro+ Bot...")
 
@@ -705,9 +604,9 @@ class ProTradeAIBot:
             # Setup scheduler
             logger.info("Setting up scheduler...")
 
-            # 🔧 FIX: More reasonable intervals for production
-            quick_interval = 3 if self.emergency_mode else 5
-            full_interval = 8 if self.emergency_mode else 15
+            # Production intervals
+            quick_interval = 5
+            full_interval = 15
 
             # Quick market scan
             self.scheduler.add_job(
@@ -729,30 +628,30 @@ class ProTradeAIBot:
                 replace_existing=True,
             )
 
-            # Shutdown check (less frequent)
+            # Shutdown check
             self.scheduler.add_job(
                 func=self.check_shutdown_status,
-                trigger=IntervalTrigger(minutes=15),
+                trigger=IntervalTrigger(minutes=20),  # Less frequent
                 id="shutdown_check",
                 name="Shutdown Status Check",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Enhanced health check
+            # Health check
             self.scheduler.add_job(
                 func=self.enhanced_health_check,
-                trigger=IntervalTrigger(minutes=30),  # Less frequent
+                trigger=IntervalTrigger(minutes=60),  # Much less frequent
                 id="health_check",
-                name="Enhanced Health Check",
+                name="Health Check",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Cleanup (every 2 hours)
+            # Cleanup (every 4 hours)
             self.scheduler.add_job(
                 func=self.cleanup_old_data,
-                trigger=IntervalTrigger(hours=2),
+                trigger=IntervalTrigger(hours=4),
                 id="cleanup",
                 name="Data Cleanup",
                 max_instances=1,
@@ -773,11 +672,11 @@ class ProTradeAIBot:
             self.scheduler.start()
             self.is_running = True
 
-            # 🆕 Enable Telegram commands
+            # Enable Telegram commands
             try:
                 from notifier import enable_simple_commands
                 enable_simple_commands(strategy_ai)
-                logger.info("✅ Manual commands activated")
+                logger.info("✅ Commands activated")
             except Exception as e:
                 logger.warning(f"Commands not enabled: {e}")
 
@@ -786,30 +685,27 @@ class ProTradeAIBot:
 
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
 
-            # 🔧 FIX: Only send startup notification if appropriate
+            # 🔧 FIXED: Only ONE startup notification per day
             if self.should_send_startup_notification():
+                today = datetime.now().strftime('%Y-%m-%d')
+                self.last_startup_today = today
+                self.startup_count_today += 1
+                self.save_simple_state()
+
                 today_stats = self.tracker.get_today_stats()
                 current_status = "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"
 
                 telegram_notifier.send_message(
                     f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
-                    f"✅ Bot is now running with enhanced tracking\n"
+                    f"✅ Bot running with enhanced tracking\n"
                     f"📊 Monitoring {len(SYMBOLS)} symbols\n"
-                    f"⚡ Quick scans: Every {quick_interval} minutes\n"
-                    f"🔍 Full scans: Every {full_interval} minutes\n"
-                    f"🌙 Auto shutdown: 1-5 AM IST\n"
+                    f"⚡ Quick scans: Every {quick_interval} min\n"
+                    f"🔍 Full scans: Every {full_interval} min\n"
                     f"💰 Capital: ${CAPITAL:,.2f}\n"
-                    f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n"
+                    f"🎯 Risk: {RISK_PER_TRADE*100:.1f}% per trade\n"
                     f"📈 Status: {current_status}\n\n"
-                    f"📊 <b>Today's Activity:</b>\n"
-                    f"🔸 Signals: {today_stats['total_signals']}\n"
-                    f"🔸 Avg Confidence: {today_stats['avg_confidence']:.1f}%\n\n"
-                    f"<i>Ready to generate profitable signals! 🚀</i>"
+                    f"<i>Ready to generate signals! 🚀</i>"
                 )
-                
-                self.startup_count_today += 1
-                self.last_startup_notification = datetime.now().isoformat()
-                self.save_notification_state()
 
             return True
 
@@ -818,11 +714,11 @@ class ProTradeAIBot:
             return False
 
     def stop(self):
-        """🔧 FIX: Stop bot with controlled notifications"""
+        """🔧 SIMPLIFIED: Stop bot without excessive notifications"""
         try:
             logger.info("Stopping ProTradeAI Pro+ Bot...")
 
-            # 🆕 Disable commands
+            # Disable commands
             try:
                 from notifier import disable_simple_commands
                 disable_simple_commands()
@@ -834,19 +730,15 @@ class ProTradeAIBot:
 
             self.is_running = False
 
-            # 🔧 FIX: Only send stop notification occasionally  
+            # Simple stop message (only for significant uptimes)
             uptime = datetime.now() - self.start_time
-            today_stats = self.tracker.get_today_stats()
-
-            # Don't spam stop notifications - only if uptime > 5 minutes
-            if uptime > timedelta(minutes=5):
+            if uptime > timedelta(minutes=10):  # Only if running > 10 minutes
+                today_stats = self.tracker.get_today_stats()
                 telegram_notifier.send_message(
-                    f"🛑 <b>ProTradeAI Pro+ Stopped</b>\n\n"
-                    f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
+                    f"🛑 <b>Bot Stopped</b>\n\n"
+                    f"⏰ Uptime: {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
                     f"📊 Signals today: {today_stats['total_signals']}\n"
-                    f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
-                    f"💼 Sessions completed: {len(self.daily_stats)}\n\n"
-                    f"<i>Bot has been shut down gracefully with tracking saved.</i>"
+                    f"<i>Bot shutdown gracefully</i>"
                 )
 
             logger.info("✅ ProTradeAI Pro+ Bot stopped successfully")
