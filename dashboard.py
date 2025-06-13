@@ -11,12 +11,15 @@ CAREFULLY WRITTEN TO SYNC WITH ENHANCED STRATEGY_AI:
 - Compatible with existing signal storage format
 """
 
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, Response
 import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 import numpy as np
+from functools import wraps
+import base64
+import os
 
 from config import DASHBOARD_CONFIG, CAPITAL, RISK_PER_TRADE, MAX_DAILY_TRADES, TELEGRAM_CONFIG
 from strategy_ai import strategy_ai
@@ -25,20 +28,38 @@ from strategy_ai import strategy_ai
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def check_auth(username, password):
+    return username == os.getenv('DASHBOARD_USER', 'admin') and password == os.getenv('DASHBOARD_PASS', 'changeme')
+
+def authenticate():
+    return Response('Authentication required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
 class EnhancedDashboard:
     def __init__(self):
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = 'protrade-ai-pro-plus-dashboard-enhanced'
         self.data_dir = Path('data')
         self.data_dir.mkdir(exist_ok=True)
-        
-        # Setup routes
+        from config import ENVIRONMENT
+        self.environment = ENVIRONMENT
+
+        # Setup routes (existing call)
         self._setup_routes()
     
     def _setup_routes(self):
-        """Setup Flask routes with enhanced endpoints"""
+        """Setup Flask routes with enhanced security"""
         
         @self.app.route('/')
+        @requires_auth
         def index():
             """Main dashboard page with enhanced features"""
             return render_template_string(
@@ -47,6 +68,7 @@ class EnhancedDashboard:
             )
         
         @self.app.route('/api/signals')
+        @requires_auth
         def api_signals():
             """Enhanced API endpoint for signals data"""
             try:
@@ -84,6 +106,7 @@ class EnhancedDashboard:
                 })
         
         @self.app.route('/api/performance')
+        @requires_auth
         def api_performance():
             """Real performance metrics from signal tracker - FIXED VERSION"""
             try:
@@ -177,6 +200,7 @@ class EnhancedDashboard:
                 })
         
         @self.app.route('/api/stats')
+        @requires_auth
         def api_stats():
             """Enhanced statistics with real tracking data"""
             try:
@@ -236,6 +260,7 @@ class EnhancedDashboard:
                 })
         
         @self.app.route('/api/system-status')
+        @requires_auth
         def api_system_status():
             """Enhanced system status with model information"""
             try:
@@ -275,6 +300,7 @@ class EnhancedDashboard:
                 })
         
         @self.app.route('/api/chart-data')
+        @requires_auth
         def api_chart_data():
             """Chart data for performance visualization"""
             try:
@@ -345,7 +371,26 @@ class EnhancedDashboard:
                     'error': str(e),
                     'chart_data': {}
                 })
-    
+        
+        @self.app.route('/health')
+        def health_check():
+            """Public health check endpoint for monitoring"""
+            try:
+                import psutil
+                signals_today = len(self.get_today_signals())
+                health_data = {
+                    'status': 'healthy',
+                    'timestamp': datetime.now().isoformat(),
+                    'signals_today': signals_today,
+                    'memory_usage_mb': round(psutil.Process().memory_info().rss / 1024 / 1024, 2),
+                    'cpu_percent': psutil.cpu_percent(),
+                    'uptime_seconds': (datetime.now() - datetime.fromtimestamp(psutil.Process().create_time())).total_seconds(),
+                    'environment': self.environment,
+                }
+                return jsonify(health_data)
+            except Exception as e:
+                return jsonify({'status': 'error', 'error': str(e)}), 500
+
     def load_signals(self):
         """Load signals from JSON file"""
         signals_file = self.data_dir / 'signals.json'

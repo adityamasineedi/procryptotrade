@@ -196,6 +196,11 @@ class ProTradeAIBot:
         self.scan_count = 0
         self.last_signal_time = None
 
+        # System monitoring additions
+        self.system_errors = 0
+        self.last_system_check = datetime.now()
+        self.memory_alerts_sent = 0
+
         # Simple performance tracking
         self.tracker = SimplePerformanceTracker()
 
@@ -447,8 +452,11 @@ class ProTradeAIBot:
             telegram_notifier.send_error_alert(str(e), "Full Market Scanner")
 
     def process_signal(self, signal: Dict):
-        """Process and send a trading signal with tracking"""
+        """Process and send a trading signal with enhanced tracking"""
         try:
+            # Track last signal time for monitoring
+            self.last_signal_time = datetime.now()
+
             # Add to daily tracking
             self.signals_today.append(signal)
 
@@ -680,7 +688,7 @@ class ProTradeAIBot:
         }
 
     def start(self):
-        """Start the trading bot"""
+        """Start the trading bot with enhanced monitoring"""
         try:
             logger.info("Starting ProTradeAI Pro+ Bot...")
 
@@ -726,12 +734,12 @@ class ProTradeAIBot:
                 replace_existing=True,
             )
 
-            # Health check (every 10 minutes)
+            # REPLACE the existing health_check job with enhanced_health_check
             self.scheduler.add_job(
-                func=self.health_check,
+                func=self.enhanced_health_check,  # CHANGED from self.health_check
                 trigger=IntervalTrigger(minutes=10),
                 id="health_check",
-                name="Health Check",
+                name="Enhanced Health Check",  # UPDATED name
                 max_instances=1,
                 replace_existing=True,
             )
@@ -847,6 +855,43 @@ class ProTradeAIBot:
         finally:
             self.stop()
 
+
+    def enhanced_health_check(self):
+        """Enhanced system health check with resource monitoring"""
+        try:
+            import psutil
+
+            # Memory monitoring
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            cpu_percent = process.cpu_percent()
+
+            # Check thresholds
+            from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
+            if memory_mb > PRODUCTION_LIMITS['max_memory_mb']:
+                if getattr(self, "memory_alerts_sent", 0) < 3:
+                    telegram_notifier.send_error_alert(
+                        f"High memory usage: {memory_mb:.1f}MB (limit: {PRODUCTION_LIMITS['max_memory_mb']}MB)",
+                        "System Monitor"
+                    )
+                    self.memory_alerts_sent = getattr(self, "memory_alerts_sent", 0) + 1
+
+            if cpu_percent > PRODUCTION_LIMITS['max_cpu_percent']:
+                logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
+
+            # Check for no signals alert
+            if hasattr(self, 'last_signal_time') and self.last_signal_time:
+                hours_since_signal = (datetime.now() - self.last_signal_time).total_seconds() / 3600
+                if hours_since_signal > SYSTEM_MONITORING['alert_on_no_signals_hours']:
+                    telegram_notifier.send_error_alert(
+                        f"No signals generated for {hours_since_signal:.1f} hours",
+                        "Signal Generator"
+                    )
+
+            logger.info("Enhanced health check completed")
+
+        except Exception as e:
+            logger.error(f"Error in enhanced health check: {e}")
 
 def main():
     """Main entry point"""

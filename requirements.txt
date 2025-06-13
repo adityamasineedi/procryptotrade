@@ -46,3 +46,12 @@ threadpoolctl==3.5.0
 
 # Python 3.11 specific optimizations
 # typing-extensions==4.12.2  # For enhanced type hints
+
+# System monitoring
+psutil==5.9.5
+
+# Enhanced security (if needed)
+bcrypt==4.0.1
+
+# Memory profiling (optional)
+memory-profiler==0.61.0

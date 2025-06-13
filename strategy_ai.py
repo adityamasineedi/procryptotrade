@@ -27,10 +27,14 @@ import warnings
 from pathlib import Path
 import json
 import time
+from collections import deque
+from threading import Lock
 
 warnings.filterwarnings('ignore')
 
 from config import (
+    API_RATE_LIMITING,
+    ERROR_HANDLING,
     MODEL_CONFIG,
     BINANCE_CONFIG,
     INDICATOR_PARAMS,
@@ -61,6 +65,7 @@ class SimpleSignalTracker:
         self.data_dir = Path('data')
         self.data_dir.mkdir(exist_ok=True)
         self.tracking_file = self.data_dir / 'signal_tracking.json'
+        self.max_signals_memory = 100  # ADD THIS
         self.load_tracking_data()
     
     def track_signal_outcome(self, signal_id: str, symbol: str, current_price: float):
@@ -109,6 +114,11 @@ class SimpleSignalTracker:
             
             self.signals_sent.append(tracking_data)
             self.save_tracking_data()
+            
+            # MEMORY MANAGEMENT: Keep only recent signals in memory
+            if len(self.signals_sent) > self.max_signals_memory:
+                self.signals_sent = self.signals_sent[-self.max_signals_memory:]
+                self.save_tracking_data()
             
             logger.info(f"📊 Added signal to tracking: {signal_id}")
             return signal_id
@@ -219,29 +229,68 @@ class SimpleSignalTracker:
             logger.error(f"Error loading tracking data: {e}")
             self.signals_sent = []
 
+class RateLimiter:
+    def __init__(self):
+        self.calls = deque()
+        
+    def wait_if_needed(self):
+        now = time.time()
+        minute_ago = now - 60
+        
+        # Remove old calls
+        while self.calls and self.calls[0] < minute_ago:
+            self.calls.popleft()
+            
+        # Check if we need to wait
+        if len(self.calls) >= API_RATE_LIMITING['calls_per_minute']:
+            sleep_time = 60 - (now - self.calls[0])
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+                
+        self.calls.append(now)
+
+# Instantiate a global rate limiter for Binance API
+rate_limiter = RateLimiter()
+
 class StrategyAI:
     def __init__(self):
         self.model = None
         self.feature_columns = None
         self.last_signals = {}
-
-        # ADD THESE 3 LINES:
         self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
         self.signals_generated_today = 0
-
-        # Add simple signal tracking
         self.signal_tracker = SimpleSignalTracker()
-        
-        # For compatibility with enhanced main.py
         self.performance_tracker = self.signal_tracker
-        
-        # Load or create model
+        self.api_error_count = 0
+        self.last_error_time = None
+        self.consecutive_errors = 0
         self.load_or_create_model()
-        
-        # ADD THIS LINE:
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Relaxed thresholds for testing")
         
+    def _create_rate_limiter(self):
+        """Create API rate limiter"""
+        class RateLimiter:
+            def __init__(self):
+                self.calls = deque()
+                
+            def wait_if_needed(self):
+                now = time.time()
+                minute_ago = now - 60
+                
+                # Remove old calls
+                while self.calls and self.calls[0] < minute_ago:
+                    self.calls.popleft()
+                    
+                # Check if we need to wait
+                if len(self.calls) >= API_RATE_LIMITING['calls_per_minute']:
+                    sleep_time = 60 - (now - self.calls[0])
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                        
+                self.calls.append(now)
+        return RateLimiter()
+
     def load_or_create_model(self):
         """Load existing model or create new one with REAL data"""
         try:
@@ -534,8 +583,11 @@ class StrategyAI:
             logger.error(f"Error saving model: {e}")
     
     def get_binance_data(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-        """Fetch OHLCV data from Binance with enhanced error handling"""
+        """Fetch OHLCV data from Binance with enhanced error handling and rate limiting"""
         try:
+            # ADD RATE LIMITING
+            rate_limiter.wait_if_needed()
+            
             url = f"{BINANCE_CONFIG['base_url']}/api/v3/klines"
             params = {
                 'symbol': symbol,
@@ -545,6 +597,8 @@ class StrategyAI:
             
             response = requests.get(url, params=params, timeout=BINANCE_CONFIG['timeout'])
             response.raise_for_status()
+            
+            self.consecutive_errors = 0  # Reset on success
             
             data = response.json()
             if not data:
@@ -557,11 +611,9 @@ class StrategyAI:
                 'buy_quote_volume', 'ignore'
             ])
             
-            # Convert to numeric and validate
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Remove invalid rows
             df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
             
             if df.empty:
@@ -571,7 +623,6 @@ class StrategyAI:
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             
-            # Validate OHLC consistency
             invalid_rows = (df['high'] < df['low']) | (df['close'] > df['high']) | (df['close'] < df['low'])
             if invalid_rows.any():
                 logger.warning(f"Found {invalid_rows.sum()} invalid OHLC rows for {symbol}")
@@ -580,11 +631,40 @@ class StrategyAI:
             return df[['open', 'high', 'low', 'close', 'volume']]
             
         except requests.exceptions.Timeout:
-            logger.error(f"Timeout fetching data for {symbol} {timeframe}")
+            self._handle_api_error("Timeout", symbol, timeframe)
+            return pd.DataFrame()
+        except requests.exceptions.HTTPError as e:
+            self._handle_api_error(f"HTTP Error: {e}", symbol, timeframe)
             return pd.DataFrame()
         except Exception as e:
-            logger.error(f"Error fetching data for {symbol} {timeframe}: {e}")
+            self._handle_api_error(f"Error: {e}", symbol, timeframe)
             return pd.DataFrame()
+
+    def _handle_api_error(self, error_msg: str, symbol: str, timeframe: str):
+        """Handle API errors with tracking and alerting"""
+        self.api_error_count += 1
+        self.consecutive_errors += 1
+        self.last_error_time = datetime.now()
+        
+        logger.error(f"API Error for {symbol} {timeframe}: {error_msg}")
+        
+        # Alert on threshold
+        if (self.api_error_count % ERROR_HANDLING['telegram_error_threshold'] == 0 and
+            ERROR_HANDLING['log_api_errors']):
+            try:
+                from notifier import telegram_notifier
+                telegram_notifier.send_error_alert(
+                    f"API errors: {self.api_error_count} total, {self.consecutive_errors} consecutive",
+                    "Binance API"
+                )
+            except Exception:
+                pass  # Don't let notification errors crash the bot
+        
+        # Cooldown on consecutive errors
+        if self.consecutive_errors >= 3:
+            cooldown = ERROR_HANDLING['error_cooldown_minutes'] * 60
+            logger.warning(f"Consecutive errors detected, cooling down for {cooldown}s")
+            time.sleep(min(cooldown, 300))  # Max 5 minute cooldown
     
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate comprehensive technical indicators"""

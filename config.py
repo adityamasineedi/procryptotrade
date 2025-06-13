@@ -469,3 +469,58 @@ if config_errors:
     for error in config_errors:
         print(f"   - {error}")
     print("\n📋 Please fix these errors before running the bot.")
+
+# ============================================================================
+# PRODUCTION SECURITY & MONITORING (ADD TO EXISTING CONFIG.PY)
+# ============================================================================
+
+# Dashboard Authentication
+DASHBOARD_AUTH = {
+    'enabled': True,
+    'username': os.getenv('DASHBOARD_USER', 'admin'),
+    'password': os.getenv('DASHBOARD_PASS', 'change_me_in_production'),
+    'session_timeout_hours': 24,
+}
+
+# API Rate Limiting Protection
+API_RATE_LIMITING = {
+    'enabled': True,
+    'calls_per_minute': 1000,
+    'calls_per_second': 10,
+    'weight_per_minute': 5000,
+    'cooldown_on_limit': 60,
+    'track_weights': True,
+}
+
+# Production Safety Limits
+PRODUCTION_LIMITS = {
+    'max_position_size_pct': 15,
+    'daily_loss_limit_pct': 8,
+    'consecutive_loss_limit': 5,
+    'max_drawdown_alert_pct': 15,
+    'position_timeout_hours': 48,
+    'max_memory_mb': 500,
+    'max_cpu_percent': 80,
+}
+
+# Enhanced Error Handling
+ERROR_HANDLING = {
+    'max_api_errors_per_hour': 10,
+    'restart_on_critical_error': True,
+    'error_cooldown_minutes': 15,
+    'telegram_error_threshold': 5,
+    'log_api_errors': True,
+}
+
+# System Monitoring
+SYSTEM_MONITORING = {
+    'enable_health_endpoint': True,
+    'alert_on_no_signals_hours': 6,
+    'system_check_interval': 300,
+    'memory_alert_threshold_mb': 400,
+    'cpu_alert_threshold_pct': 85,
+}
+
+# Environment Detection
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')  # production, development, testing
+IS_PRODUCTION = ENVIRONMENT == 'production'
