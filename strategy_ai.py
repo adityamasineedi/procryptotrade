@@ -801,14 +801,14 @@ class StrategyAI:
         except Exception:
             return 20  # Even lower fallback
 
-    def predict_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
+    def predict_signal(self, symbol: str, timeframe: str, bypass_cooldown: bool = False) -> Optional[Dict]:
         """🔧 ENHANCED: Generate signals with much lower thresholds"""
         try:
-            # Reduced cooldown for more signals
+            # Reduced cooldown for more signals (or bypass for commands)
             signal_key = f"{symbol}_{timeframe}"
-            if signal_key in self.last_signals:
+            if not bypass_cooldown and signal_key in self.last_signals:
                 last_time = self.last_signals[signal_key]
-                cooldown_minutes = 15 if timeframe == '1h' else 20  # Much reduced
+                cooldown_minutes = 10 if timeframe == '1h' else 15  # Much reduced
                 if datetime.now() - last_time < timedelta(minutes=cooldown_minutes):
                     return None
 

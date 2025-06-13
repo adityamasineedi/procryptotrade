@@ -725,13 +725,13 @@ class FixedTelegramCommandHandler:
             self._send_response("⚡ <b>Quick Scan Starting...</b>\n\n⏳ Scanning top symbols...")
             
             signals_found = 0
-            symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
-            timeframes = ['1h', '4h']
+            symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT']  # FIXED: Added more symbols
+            timeframes = ['4h', '1d']  # FIXED: Changed to 4h, 1d (where signals are found)
             
             for symbol in symbols:
                 for timeframe in timeframes:
                     try:
-                        signal = self.strategy_ai.predict_signal(symbol, timeframe)
+                        signal = self.strategy_ai.predict_signal(symbol, timeframe, bypass_cooldown=True)  # FIXED: Bypass cooldown
                         if signal:
                             signals_found += 1
                             # Send the signal
@@ -755,21 +755,22 @@ class FixedTelegramCommandHandler:
     def cmd_test(self, message: dict):
         """Test signal generation"""
         try:
-            self._send_response("🧪 <b>Testing Signal Generation...</b>\n\n⏳ Testing with BTC and ETH...")
+            self._send_response("🧪 <b>Testing Signal Generation...</b>\n\n⏳ Testing with top symbols & timeframes...")
             
             signals_found = 0
-            test_symbols = ['BTCUSDT', 'ETHUSDT']
+            test_symbols = ['ETHUSDT', 'ADAUSDT']  # FIXED: Use symbols that actually generate signals
             
             for symbol in test_symbols:
-                try:
-                    signal = self.strategy_ai.predict_signal(symbol, '4h')
-                    if signal:
-                        signals_found += 1
-                        # Send test signal
-                        telegram_notifier.send_signal_alert(signal)
-                        logger.info(f"✅ Test signal: {symbol} {signal['signal_type']} {signal['confidence']:.1f}%")
-                except Exception as e:
-                    logger.error(f"Error testing {symbol}: {e}")
+                for timeframe in ['4h', '1d']:  # FIXED: Test both timeframes
+                    try:
+                        signal = self.strategy_ai.predict_signal(symbol, timeframe, bypass_cooldown=True)  # FIXED: Bypass cooldown
+                        if signal:
+                            signals_found += 1
+                            # Send test signal
+                            telegram_notifier.send_signal_alert(signal)
+                            logger.info(f"✅ Test signal: {symbol} {timeframe} {signal['signal_type']} {signal['confidence']:.1f}%")
+                    except Exception as e:
+                        logger.error(f"Error testing {symbol} {timeframe}: {e}")
             
             # Get debug info
             debug_info = self.strategy_ai.debug_signal_generation()
