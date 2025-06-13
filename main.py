@@ -504,30 +504,50 @@ class ProTradeAIBot:
             logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
 
     def enhanced_health_check(self):
-        """🔧 FIX: Enhanced health check with reduced notifications"""
+        """🔧 IMPROVED: Enhanced health check with safe config imports"""
         try:
-            import psutil
+            # Safe import of psutil
+            try:
+                import psutil
+                process = psutil.Process()
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                cpu_percent = process.cpu_percent()
+            except ImportError:
+                logger.warning("psutil not available, skipping system monitoring")
+                return
+            except Exception as e:
+                logger.error(f"Error getting system stats: {e}")
+                return
 
-            # Memory monitoring
-            process = psutil.Process()
-            memory_mb = process.memory_info().rss / 1024 / 1024
-            cpu_percent = process.cpu_percent()
+            # Safe import of config values with defaults
+            try:
+                from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
+                max_memory = PRODUCTION_LIMITS.get('max_memory_mb', 500)
+                alert_hours = SYSTEM_MONITORING.get('alert_on_no_signals_hours', 6)
+            except (ImportError, AttributeError):
+                # Use defaults if config values don't exist
+                max_memory = 500
+                alert_hours = 6
+                logger.debug("Using default monitoring thresholds")
 
-            # Check thresholds - only alert once per day for memory issues
-            from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
-            if memory_mb > PRODUCTION_LIMITS['max_memory_mb']:
+            # Memory monitoring with safe thresholds
+            if memory_mb > max_memory:
                 if (not hasattr(self, 'last_memory_alert') or
                     datetime.now() - self.last_memory_alert > timedelta(hours=24)):
                     telegram_notifier.send_error_alert(
-                        f"High memory usage: {memory_mb:.1f}MB (limit: {PRODUCTION_LIMITS['max_memory_mb']}MB)",
+                        f"High memory usage: {memory_mb:.1f}MB (limit: {max_memory}MB)",
                         "System Monitor"
                     )
                     self.last_memory_alert = datetime.now()
 
+            # CPU monitoring (optional alert)
+            if cpu_percent > 85:
+                logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
+
             # Check for no signals alert - only once per 6 hours
             if hasattr(self, 'last_signal_time') and self.last_signal_time:
                 hours_since_signal = (datetime.now() - self.last_signal_time).total_seconds() / 3600
-                if (hours_since_signal > SYSTEM_MONITORING['alert_on_no_signals_hours'] and
+                if (hours_since_signal > alert_hours and
                     (not hasattr(self, 'last_no_signal_alert') or
                      datetime.now() - self.last_no_signal_alert > timedelta(hours=6))):
                     telegram_notifier.send_error_alert(
@@ -535,6 +555,10 @@ class ProTradeAIBot:
                         "Signal Generator"
                     )
                     self.last_no_signal_alert = datetime.now()
+
+            # Log health status occasionally
+            if self.scan_count % 120 == 0:  # Every 2 hours (120 scans * 1min)
+                logger.info(f"Health check: Memory {memory_mb:.1f}MB, CPU {cpu_percent:.1f}%")
 
         except Exception as e:
             logger.error(f"Error in enhanced health check: {e}")
@@ -719,6 +743,14 @@ class ProTradeAIBot:
             self.scheduler.start()
             self.is_running = True
 
+            # 🆕 Enable Telegram commands
+            try:
+                from notifier import enable_simple_commands
+                enable_simple_commands(strategy_ai)
+                logger.info("✅ Manual commands activated")
+            except Exception as e:
+                logger.warning(f"Commands not enabled: {e}")
+
             # Check initial shutdown status
             self.check_shutdown_status()
 
@@ -759,6 +791,13 @@ class ProTradeAIBot:
         """🔧 FIX: Stop bot with controlled notifications"""
         try:
             logger.info("Stopping ProTradeAI Pro+ Bot...")
+
+            # 🆕 Disable commands
+            try:
+                from notifier import disable_simple_commands
+                disable_simple_commands()
+            except Exception as e:
+                logger.warning(f"Error disabling commands: {e}")
 
             if self.scheduler.running:
                 self.scheduler.shutdown(wait=True)
