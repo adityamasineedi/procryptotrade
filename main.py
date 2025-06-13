@@ -181,8 +181,12 @@ class ProTradeAIBot:
         self.daily_stats = {}
         self.last_health_check = datetime.now()
 
-        # 🔧 FIX: Prevent notification spam
-        self.notification_state_file = Path("data/notification_state.json")
+        # Initialize data storage FIRST
+        self.data_dir = Path("data")
+        self.data_dir.mkdir(exist_ok=True)  # Create directory before using it
+
+        # 🔧 FIX: Create notification state file path AFTER data dir exists
+        self.notification_state_file = self.data_dir / "notification_state.json"
         self.load_notification_state()
 
         self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
@@ -203,10 +207,6 @@ class ProTradeAIBot:
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-
-        # Initialize data storage
-        self.data_dir = Path("data")
-        self.data_dir.mkdir(exist_ok=True)
 
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Aggressive scanning enabled")

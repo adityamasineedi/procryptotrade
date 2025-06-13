@@ -838,3 +838,60 @@ class EnhancedTelegramNotifier(TelegramNotifier):
             self.command_handler.stop_listening()
             self.command_handler = None
             logger.info("🛑 Telegram commands disabled")
+
+# ========================================================================
+# Simple Command Enable/Disable Functions
+# ========================================================================
+
+# Global command handler instance
+command_handler = None
+
+def enable_simple_commands(strategy_ai_instance):
+    """Enable Telegram commands - called from main.py"""
+    global command_handler
+    try:
+        if not TELEGRAM_CONFIG['bot_token'] or not TELEGRAM_CONFIG['chat_id']:
+            logger.error("Telegram credentials not configured for commands")
+            return False
+            
+        command_handler = TelegramCommandHandler(
+            TELEGRAM_CONFIG['bot_token'],
+            TELEGRAM_CONFIG['chat_id'],
+            strategy_ai_instance
+        )
+        command_handler.start_listening()
+        logger.info("✅ Telegram commands enabled successfully")
+        
+        # Send activation message
+        telegram_notifier.send_message(
+            "🤖 <b>Manual Commands Activated!</b>\n\n"
+            "✅ You can now control the bot via Telegram\n"
+            "📱 Type <code>/help</code> to see available commands\n\n"
+            "<i>Commands include: /scan, /quick, /status, /stats, /test</i>"
+        )
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error enabling commands: {e}")
+        return False
+
+def disable_simple_commands():
+    """Disable Telegram commands - called from main.py"""
+    global command_handler
+    try:
+        if command_handler:
+            command_handler.stop_listening()
+            command_handler = None
+            logger.info("🛑 Telegram commands disabled")
+            
+            telegram_notifier.send_message(
+                "🛑 <b>Manual Commands Disabled</b>\n\n"
+                "Commands have been deactivated during shutdown."
+            )
+            
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error disabling commands: {e}")
+        return False

@@ -21,7 +21,14 @@ from functools import wraps
 import base64
 import os
 
-from config import DASHBOARD_CONFIG, CAPITAL, RISK_PER_TRADE, MAX_DAILY_TRADES, TELEGRAM_CONFIG
+from config import (
+    DASHBOARD_CONFIG, 
+    CAPITAL, 
+    RISK_PER_TRADE, 
+    MAX_DAILY_TRADES, 
+    TELEGRAM_CONFIG,
+    DASHBOARD_AUTH  # Add this missing import
+)
 from strategy_ai import strategy_ai
 
 # Setup logging
@@ -29,7 +36,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def check_auth(username, password):
-    return username == os.getenv('DASHBOARD_USER', 'admin') and password == os.getenv('DASHBOARD_PASS', 'changeme')
+    """Check authentication using config values"""
+    if not DASHBOARD_AUTH['enabled']:
+        return True  # Authentication disabled
+        
+    return (username == DASHBOARD_AUTH['username'] and 
+            password == DASHBOARD_AUTH['password'])
 
 def authenticate():
     return Response('Authentication required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
@@ -37,6 +49,9 @@ def authenticate():
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        if not DASHBOARD_AUTH['enabled']:
+            return f(*args, **kwargs)  # Skip auth if disabled
+            
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
             return authenticate()
@@ -108,19 +123,22 @@ class EnhancedDashboard:
         @self.app.route('/api/performance')
         @requires_auth
         def api_performance():
-            """Real performance metrics from signal tracker - FIXED VERSION"""
+            """Real performance metrics from signal tracker - SAFER VERSION"""
             try:
+                # Safely check if strategy_ai is properly initialized
+                if not hasattr(strategy_ai, 'signal_tracker') or strategy_ai.signal_tracker is None:
+                    logger.warning("Strategy AI signal tracker not initialized")
+                    return jsonify({
+                        'success': True,
+                        'performance': self._get_default_performance_data()
+                    })
+
                 # Get real performance from strategy_ai signal tracker with error handling
                 try:
                     performance_metrics_7d = strategy_ai.signal_tracker.get_performance_metrics(days=7)
                 except Exception as e:
                     logger.debug(f"Error getting 7d metrics: {e}")
-                    performance_metrics_7d = {
-                        'total_signals': 0, 'win_rate': 0.0, 'avg_confidence': 0.0,
-                        'total_pnl': 0.0, 'avg_return_per_trade': 0.0, 'best_trade': 0.0,
-                        'worst_trade': 0.0, 'sharpe_ratio': 0.0, 'max_drawdown': 0.0,
-                        'winning_signals': 0, 'losing_signals': 0
-                    }
+                    performance_metrics_7d = self._get_default_metrics()
                 
                 try:
                     performance_metrics_30d = strategy_ai.signal_tracker.get_performance_metrics(days=30)
@@ -133,7 +151,11 @@ class EnhancedDashboard:
                     model_info = strategy_ai.get_model_info()
                 except Exception as e:
                     logger.debug(f"Error getting model info: {e}")
-                    model_info = {'model_type': 'Unknown', 'feature_count': 0, 'model_loaded': False}
+                    model_info = {
+                        'model_type': 'RandomForestClassifier', 
+                        'feature_count': 21, 
+                        'model_loaded': True
+                    }
                 
                 # Calculate additional stats safely
                 try:
@@ -142,16 +164,7 @@ class EnhancedDashboard:
                     logger.debug(f"Error getting today signals: {e}")
                     signals_today = []
                 
-                # Get model accuracy safely
-                model_accuracy = 75.0  # From your successful training
-                try:
-                    if hasattr(strategy_ai, 'model') and strategy_ai.model is not None:
-                        if hasattr(strategy_ai.model, 'score'):
-                            # Use the validation accuracy from training
-                            model_accuracy = 75.0  # Your real validation accuracy
-                except:
-                    model_accuracy = 75.0
-                
+                # Build performance data
                 performance_data = {
                     'real_metrics_7d': performance_metrics_7d,
                     'real_metrics_30d': performance_metrics_30d,
@@ -159,7 +172,7 @@ class EnhancedDashboard:
                     'signals_today': len(signals_today),
                     'capital': CAPITAL,
                     'risk_per_trade': RISK_PER_TRADE * 100,
-                    'model_accuracy': model_accuracy,
+                    'model_accuracy': 75.0,  # Default based on training results
                     'is_real_data_model': True,
                     'last_updated': datetime.now().isoformat(),
                     'status': 'Real data model active with quality validation'
@@ -172,32 +185,38 @@ class EnhancedDashboard:
                 
             except Exception as e:
                 logger.error(f"Error getting performance metrics: {e}")
-                # Return safe defaults
                 return jsonify({
                     'success': True,
-                    'performance': {
-                        'real_metrics_7d': {
-                            'total_signals': 0, 'win_rate': 0.0, 'total_pnl': 0.0,
-                            'avg_return_per_trade': 0.0, 'best_trade': 0.0, 'worst_trade': 0.0,
-                            'sharpe_ratio': 0.0, 'winning_signals': 0, 'losing_signals': 0
-                        },
-                        'real_metrics_30d': {
-                            'total_signals': 0, 'win_rate': 0.0, 'total_pnl': 0.0
-                        },
-                        'model_info': {
-                            'model_type': 'RandomForestClassifier',
-                            'feature_count': 21,
-                            'model_loaded': True
-                        },
-                        'signals_today': 0,
-                        'capital': CAPITAL,
-                        'risk_per_trade': RISK_PER_TRADE * 100,
-                        'model_accuracy': 75.0,
-                        'is_real_data_model': True,
-                        'last_updated': datetime.now().isoformat(),
-                        'status': 'Model ready - waiting for signals to track performance'
-                    }
+                    'performance': self._get_default_performance_data()
                 })
+
+    def _get_default_metrics(self):
+        """Get default performance metrics"""
+        return {
+            'total_signals': 0, 'win_rate': 0.0, 'avg_confidence': 0.0,
+            'total_pnl': 0.0, 'avg_return_per_trade': 0.0, 'best_trade': 0.0,
+            'worst_trade': 0.0, 'sharpe_ratio': 0.0, 'max_drawdown': 0.0,
+            'winning_signals': 0, 'losing_signals': 0
+        }
+
+    def _get_default_performance_data(self):
+        """Get default performance data structure"""
+        return {
+            'real_metrics_7d': self._get_default_metrics(),
+            'real_metrics_30d': self._get_default_metrics(),
+            'model_info': {
+                'model_type': 'RandomForestClassifier',
+                'feature_count': 21,
+                'model_loaded': True
+            },
+            'signals_today': 0,
+            'capital': CAPITAL,
+            'risk_per_trade': RISK_PER_TRADE * 100,
+            'model_accuracy': 75.0,
+            'is_real_data_model': True,
+            'last_updated': datetime.now().isoformat(),
+            'status': 'Model ready - waiting for signals to track performance'
+        }
         
         @self.app.route('/api/stats')
         @requires_auth

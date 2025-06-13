@@ -264,33 +264,11 @@ class StrategyAI:
         self.api_error_count = 0
         self.last_error_time = None
         self.consecutive_errors = 0
+        # Removed the rate limiter creation line - use global one
         self.load_or_create_model()
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Relaxed thresholds for testing")
         
-    def _create_rate_limiter(self):
-        """Create API rate limiter"""
-        class RateLimiter:
-            def __init__(self):
-                self.calls = deque()
-                
-            def wait_if_needed(self):
-                now = time.time()
-                minute_ago = now - 60
-                
-                # Remove old calls
-                while self.calls and self.calls[0] < minute_ago:
-                    self.calls.popleft()
-                    
-                # Check if we need to wait
-                if len(self.calls) >= API_RATE_LIMITING['calls_per_minute']:
-                    sleep_time = 60 - (now - self.calls[0])
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
-                        
-                self.calls.append(now)
-        return RateLimiter()
-
     def load_or_create_model(self):
         """Load existing model or create new one with REAL data"""
         try:
