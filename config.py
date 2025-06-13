@@ -282,8 +282,8 @@ SL_TP_CONFIG = {
 # ============================================================================
 
 DASHBOARD_CONFIG = {
-    'host': os.getenv('DASHBOARD_HOST', '127.0.0.1'),
-    'port': int(os.getenv('DASHBOARD_PORT', '5000')),
+    'host': '0.0.0.0',  # Allow external access for deployment
+    'port': int(os.getenv('PORT', '5000')),  # Use PORT env var for deployment
     'debug': os.getenv('DASHBOARD_DEBUG', 'False').lower() == 'true',
     'refresh_interval': 30,  # Seconds
     'max_signals_display': 50,

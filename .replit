@@ -6,3 +6,8 @@ packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "pkg-config", "rus
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[deployment]
+run = "python dashboard.py"
+deploymentTarget = "gce"
+ignoredPaths = [".venv", "__pycache__", ".pytest_cache"]
