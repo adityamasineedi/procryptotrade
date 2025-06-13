@@ -1,13 +1,6 @@
-# Path: main.py
 """
-ProTradeAI Pro+ Main Application
-Scheduler and orchestrator for the trading bot with auto shutdown and enhanced tracking
-
-CAREFULLY WRITTEN TO SYNC WITH EXISTING CODE:
-- Uses exact function names from your existing strategy_ai.py
-- Compatible with your existing config.py and notifier.py
-- Adds performance tracking without breaking existing functionality
-- Enhanced error handling and monitoring
+ProTradeAI Pro+ Main Application - FIXED VERSION
+Stops continuous restart notifications while maintaining full compatibility
 """
 
 import os
@@ -35,7 +28,7 @@ from config import (
     LOGGING_CONFIG,
     SCHEDULER_CONFIG,
     validate_config,
-    EMERGENCY_MODE,  # ADD THIS LINE
+    EMERGENCY_MODE,
 )
 from strategy_ai import strategy_ai
 from notifier import telegram_notifier
@@ -55,10 +48,8 @@ def setup_logging():
         ],
     )
 
-
 setup_logging()
 logger = logging.getLogger(__name__)
-
 
 class SimplePerformanceTracker:
     """Simple performance tracking for compatibility with existing code"""
@@ -154,7 +145,7 @@ class SimplePerformanceTracker:
         """Save tracking data"""
         try:
             data = {
-                "signals_sent": self.signals_sent[-500:],  # Keep last 500
+                "signals_sent": self.signals_sent[-500:],
                 "last_updated": datetime.now().isoformat(),
             }
 
@@ -180,7 +171,6 @@ class SimplePerformanceTracker:
             logger.error(f"Error loading performance data: {e}")
             self.signals_sent = []
 
-
 class ProTradeAIBot:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
@@ -191,17 +181,20 @@ class ProTradeAIBot:
         self.daily_stats = {}
         self.last_health_check = datetime.now()
 
-        # ADD THESE LINES:
+        # 🔧 FIX: Prevent notification spam
+        self.notification_state_file = Path("data/notification_state.json")
+        self.load_notification_state()
+
         self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
         self.scan_count = 0
         self.last_signal_time = None
 
-        # System monitoring additions
+        # System monitoring
         self.system_errors = 0
         self.last_system_check = datetime.now()
         self.memory_alerts_sent = 0
 
-        # Simple performance tracking
+        # Performance tracking
         self.tracker = SimplePerformanceTracker()
 
         # Timezone for shutdown schedule (IST)
@@ -218,6 +211,70 @@ class ProTradeAIBot:
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Aggressive scanning enabled")
 
+    def load_notification_state(self):
+        """🔧 FIX: Load notification state to prevent spam"""
+        try:
+            if self.notification_state_file.exists():
+                with open(self.notification_state_file, 'r') as f:
+                    state = json.load(f)
+                    self.last_startup_notification = state.get('last_startup_notification')
+                    self.last_shutdown_notification = state.get('last_shutdown_notification')
+                    self.last_resume_notification = state.get('last_resume_notification')
+                    self.startup_count_today = state.get('startup_count_today', 0)
+                    self.last_startup_date = state.get('last_startup_date')
+            else:
+                self.last_startup_notification = None
+                self.last_shutdown_notification = None
+                self.last_resume_notification = None
+                self.startup_count_today = 0
+                self.last_startup_date = None
+        except Exception as e:
+            logger.error(f"Error loading notification state: {e}")
+            self.last_startup_notification = None
+            self.last_shutdown_notification = None
+            self.last_resume_notification = None
+            self.startup_count_today = 0
+            self.last_startup_date = None
+
+    def save_notification_state(self):
+        """🔧 FIX: Save notification state"""
+        try:
+            state = {
+                'last_startup_notification': self.last_startup_notification,
+                'last_shutdown_notification': self.last_shutdown_notification,
+                'last_resume_notification': self.last_resume_notification,
+                'startup_count_today': self.startup_count_today,
+                'last_startup_date': self.last_startup_date
+            }
+            with open(self.notification_state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving notification state: {e}")
+
+    def should_send_startup_notification(self) -> bool:
+        """🔧 FIX: Check if we should send startup notification"""
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            # Reset daily count if new day
+            if self.last_startup_date != today:
+                self.startup_count_today = 0
+                self.last_startup_date = today
+            
+            # Don't spam - max 3 startup notifications per day
+            if self.startup_count_today >= 3:
+                return False
+            
+            # Don't send if we sent one in the last 30 minutes
+            if self.last_startup_notification:
+                last_time = datetime.fromisoformat(self.last_startup_notification)
+                if datetime.now() - last_time < timedelta(minutes=30):
+                    return False
+            
+            return True
+        except Exception:
+            return True  # Default to allowing if check fails
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
@@ -225,75 +282,79 @@ class ProTradeAIBot:
         sys.exit(0)
 
     def is_shutdown_time(self) -> bool:
-        """Check if current time is in shutdown period - DISABLED for testing"""
-        # ADD THIS LINE:
+        """Check if current time is in shutdown period"""
         if self.emergency_mode:
             return False
 
         try:
             current_time = datetime.now(self.timezone)
             current_hour = current_time.hour
-
-            # Shutdown between 1 AM and 5 AM IST
             return 1 <= current_hour < 5
-
         except Exception as e:
             logger.error(f"Error checking shutdown time: {e}")
             return False
 
     def check_shutdown_status(self):
-        """Check and handle shutdown/resume based on time"""
+        """🔧 FIX: Check shutdown status with reduced notifications"""
         try:
             should_shutdown = self.is_shutdown_time()
 
             if should_shutdown and not self.is_shutdown_period:
-                # Enter shutdown period
                 logger.info("🌙 Entering maintenance shutdown period (1-5 AM IST)")
                 self.is_shutdown_period = True
 
-                # Pause trading-related jobs but keep system monitoring
+                # Pause trading jobs
                 for job in self.scheduler.get_jobs():
                     if job.id in ["signal_scan", "quick_scan"]:
                         job.pause()
                         logger.info(f"Paused job: {job.id}")
 
-                # Send shutdown notification
-                today_stats = self.tracker.get_today_stats()
-                telegram_notifier.send_message(
-                    "🌙 <b>Maintenance Period Started</b>\n\n"
-                    "🔸 Signal scanning paused (1-5 AM IST)\n"
-                    "🔸 System monitoring continues\n"
-                    f"📊 Today's signals: {today_stats['total_signals']}\n"
-                    f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
-                    "🔸 Bot will resume automatically at 5 AM IST\n\n"
-                    "<i>Good night! 😴</i>"
-                )
+                # 🔧 FIX: Only send shutdown notification once per shutdown period
+                if (not self.last_shutdown_notification or 
+                    datetime.now() - datetime.fromisoformat(self.last_shutdown_notification) > timedelta(hours=8)):
+                    
+                    today_stats = self.tracker.get_today_stats()
+                    telegram_notifier.send_message(
+                        "🌙 <b>Maintenance Period Started</b>\n\n"
+                        "🔸 Signal scanning paused (1-5 AM IST)\n"
+                        "🔸 System monitoring continues\n"
+                        f"📊 Today's signals: {today_stats['total_signals']}\n"
+                        f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
+                        "🔸 Bot will resume automatically at 5 AM IST\n\n"
+                        "<i>Good night! 😴</i>"
+                    )
+                    self.last_shutdown_notification = datetime.now().isoformat()
+                    self.save_notification_state()
 
             elif not should_shutdown and self.is_shutdown_period:
-                # Exit shutdown period
                 logger.info("☀️ Exiting maintenance shutdown period")
                 self.is_shutdown_period = False
 
-                # Resume trading-related jobs
+                # Resume trading jobs
                 for job in self.scheduler.get_jobs():
                     if job.id in ["signal_scan", "quick_scan"]:
                         job.resume()
                         logger.info(f"Resumed job: {job.id}")
 
-                # Send resume notification
-                telegram_notifier.send_message(
-                    "☀️ <b>Trading Resumed</b>\n\n"
-                    "✅ Signal scanning reactivated\n"
-                    "🔸 All systems operational\n"
-                    "🔸 Ready for new trading opportunities\n\n"
-                    "<i>Good morning! Let's trade! 🚀</i>"
-                )
+                # 🔧 FIX: Only send resume notification once per resume
+                if (not self.last_resume_notification or 
+                    datetime.now() - datetime.fromisoformat(self.last_resume_notification) > timedelta(hours=8)):
+                    
+                    telegram_notifier.send_message(
+                        "☀️ <b>Trading Resumed</b>\n\n"
+                        "✅ Signal scanning reactivated\n"
+                        "🔸 All systems operational\n"
+                        "🔸 Ready for new trading opportunities\n\n"
+                        "<i>Good morning! Let's trade! 🚀</i>"
+                    )
+                    self.last_resume_notification = datetime.now().isoformat()
+                    self.save_notification_state()
 
         except Exception as e:
             logger.error(f"Error in shutdown status check: {e}")
 
     def validate_configuration(self) -> bool:
-        """Validate all configuration settings"""
+        """🔧 FIX: Validate config without testing Telegram every time"""
         logger.info("Validating configuration...")
 
         # Check config
@@ -303,13 +364,22 @@ class ProTradeAIBot:
                 logger.error(f"Configuration error: {error}")
             return False
 
-        # Test Telegram connection
-        logger.info("Testing Telegram connection...")
-        if not telegram_notifier.test_connection():
-            logger.error("Telegram connection test failed")
-            return False
+        # 🔧 FIX: Only test Telegram connection on first validation of the day
+        test_telegram = True
+        if hasattr(self, 'last_telegram_test'):
+            last_test = datetime.fromisoformat(self.last_telegram_test)
+            if datetime.now() - last_test < timedelta(hours=6):
+                test_telegram = False
 
-        # Check AI model - USING EXACT EXISTING FUNCTION NAME
+        if test_telegram:
+            logger.info("Testing Telegram connection...")
+            if telegram_notifier.test_connection():
+                self.last_telegram_test = datetime.now().isoformat()
+            else:
+                logger.error("Telegram connection test failed")
+                return False
+
+        # Check AI model
         logger.info("Checking AI model...")
         try:
             model_info = strategy_ai.get_model_info()
@@ -326,15 +396,12 @@ class ProTradeAIBot:
     def get_simple_market_volatility(self) -> float:
         """Get simple market volatility estimate"""
         try:
-            # Get BTC data for volatility estimation
             df = strategy_ai.get_binance_data("BTCUSDT", "1d", limit=7)
             if df.empty or len(df) < 3:
-                return 0.05  # Default
+                return 0.05
 
-            # Simple volatility calculation
             returns = df["close"].pct_change().dropna()
             volatility = returns.std()
-
             return volatility
 
         except Exception as e:
@@ -342,95 +409,58 @@ class ProTradeAIBot:
             return 0.05
 
     def quick_market_scan(self):
-        """Enhanced market scan with more aggressive settings"""
+        """🔧 FIX: Enhanced market scan with reduced logging"""
         try:
             if self.is_shutdown_period:
-                logger.info("Skipping quick scan - in shutdown period")
                 return
 
-            # ADD THESE LINES:
             self.scan_count += 1
-            logger.info(f"🔍 Quick scan #{self.scan_count} - Emergency mode: {self.emergency_mode}")
 
-            # Check overall market conditions
+            # 🔧 FIX: Much less verbose logging
+            if self.scan_count % 20 == 0:  # Log every 20th scan instead of every scan
+                logger.info(f"🔍 Quick scan #{self.scan_count}")
+
+            # Check market conditions
             market_volatility = self.get_simple_market_volatility()
-            logger.info(f"📊 Current market volatility: {market_volatility:.4f}")
 
-            # Adaptive scanning based on market conditions
             if market_volatility < MARKET_CONDITIONS["low_volatility_threshold"]:
-                scan_symbols = SYMBOLS[:5]  # Focus on top 5 in low volatility
-                scan_timeframes = ["4h", "1h"]  # Include 1h for more opportunities
-                scan_strategy = "SIDEWAYS_FOCUSED"
-                logger.info("🔄 Low volatility - focusing on range/sideways trading")
+                scan_symbols = SYMBOLS[:5]
+                scan_timeframes = ["4h", "1h"]
             else:
                 scan_symbols = SYMBOLS[:3]
                 scan_timeframes = ["1h", "4h"]
-                scan_strategy = "TREND_FOCUSED"
-                logger.info("⚡ Normal volatility - using standard trend scanning")
 
             signals = []
-            processed_pairs = 0
 
             for symbol in scan_symbols:
                 for timeframe in scan_timeframes:
                     try:
-                        processed_pairs += 1
-                        logger.info(
-                            f"🔎 Scanning {symbol} {timeframe} ({processed_pairs}/{len(scan_symbols)*len(scan_timeframes)})"
-                        )
-
-                        # USING YOUR EXISTING FUNCTION - predict_signal
                         signal = strategy_ai.predict_signal(symbol, timeframe)
-
                         if signal:
                             signals.append(signal)
                             logger.info(
                                 f"✅ Signal: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%"
                             )
-                        else:
-                            logger.debug(f"❌ No signal: {symbol} {timeframe}")
-
                     except Exception as e:
                         logger.error(f"Error scanning {symbol} {timeframe}: {e}")
 
-            # Results summary
-            total_signals = len(signals)
-            if total_signals > 0:
-                logger.info(f"🎯 Market scan generated {total_signals} signals")
-
+            # Process signals
+            if signals:
+                logger.info(f"🎯 Market scan generated {len(signals)} signals")
                 for signal in signals:
                     self.process_signal(signal)
-            else:
-                logger.info("📭 Market scan: No signals generated")
-
-                # Debug info for no signals
-                if not hasattr(self, "_last_debug_time"):
-                    self._last_debug_time = datetime.now()
-
-                time_since_debug = datetime.now() - self._last_debug_time
-                if time_since_debug > timedelta(
-                    hours=1
-                ):  # Debug every hour if no signals
-                    logger.info("🔧 Running signal generation debug...")
-                    self.debug_no_signals()
-                    self._last_debug_time = datetime.now()
 
         except Exception as e:
             logger.error(f"Error in enhanced market scan: {e}")
-            import traceback
-
-            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def full_market_scan(self):
-        """Full market scan using your existing scan_all_symbols function"""
+        """Full market scan using existing scan_all_symbols function"""
         try:
             if self.is_shutdown_period:
-                logger.info("Skipping full scan - in shutdown period")
                 return
 
             logger.info("Starting full market scan...")
 
-            # USING YOUR EXISTING FUNCTION - scan_all_symbols
             signals = strategy_ai.scan_all_symbols()
 
             if not signals:
@@ -439,196 +469,92 @@ class ProTradeAIBot:
 
             logger.info(f"Full scan generated {len(signals)} signals")
 
-            # Process each signal
             for signal in signals:
                 self.process_signal(signal)
-                time.sleep(2)  # Small delay between signals
+                time.sleep(2)
 
-            # Update daily stats
             self._update_daily_stats()
 
         except Exception as e:
             logger.error(f"Error in full market scan: {e}")
-            telegram_notifier.send_error_alert(str(e), "Full Market Scanner")
+            # 🔧 FIX: Only send error alert once per hour
+            if (not hasattr(self, 'last_scan_error_alert') or 
+                datetime.now() - self.last_scan_error_alert > timedelta(hours=1)):
+                telegram_notifier.send_error_alert(str(e), "Full Market Scanner")
+                self.last_scan_error_alert = datetime.now()
 
     def process_signal(self, signal: Dict):
-        """Process and send a trading signal with enhanced tracking"""
+        """Process and send a trading signal"""
         try:
-            # Track last signal time for monitoring
             self.last_signal_time = datetime.now()
-
-            # Add to daily tracking
             self.signals_today.append(signal)
 
-            # Send telegram alert - USING YOUR EXISTING FUNCTION
             success = telegram_notifier.send_signal_alert(signal)
 
             if success:
                 logger.info(
                     f"Signal sent: {signal['symbol']} {signal['signal_type']} {signal['confidence']:.1f}%"
                 )
-
-                # Track the signal in our simple tracker
                 self.tracker.track_signal(signal)
-
-                # Save signal to file - USING YOUR EXISTING FUNCTION
                 self._save_signal(signal)
             else:
                 logger.error(f"Failed to send signal: {signal['symbol']}")
 
         except Exception as e:
-            logger.error(
-                f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}"
-            )
+            logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
 
-    def health_check(self):
-        """System health check with enhanced tracking"""
+    def enhanced_health_check(self):
+        """🔧 FIX: Enhanced health check with reduced notifications"""
         try:
-            logger.info("Performing health check...")
+            import psutil
 
-            current_time = datetime.now()
-            uptime = current_time - self.start_time
+            # Memory monitoring
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            cpu_percent = process.cpu_percent()
 
-            # Get today's stats from tracker
-            today_stats = self.tracker.get_today_stats()
-            week_stats = self.tracker.get_week_stats()
+            # Check thresholds - only alert once per day for memory issues
+            from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
+            if memory_mb > PRODUCTION_LIMITS['max_memory_mb']:
+                if (not hasattr(self, 'last_memory_alert') or
+                    datetime.now() - self.last_memory_alert > timedelta(hours=24)):
+                    telegram_notifier.send_error_alert(
+                        f"High memory usage: {memory_mb:.1f}MB (limit: {PRODUCTION_LIMITS['max_memory_mb']}MB)",
+                        "System Monitor"
+                    )
+                    self.last_memory_alert = datetime.now()
 
-            # Calculate success rate (dummy for now)
-            success_rate = 85.0  # In real implementation, track actual performance
-
-            status = {
-                "healthy": True,
-                "status": "Shutdown Period" if self.is_shutdown_period else "Running",
-                "uptime": f"{uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m",
-                "signals_today": today_stats["total_signals"],
-                "avg_confidence_today": today_stats["avg_confidence"],
-                "signals_this_week": week_stats["total_signals"],
-                "success_rate": success_rate,
-                "model_accuracy": 78.5,  # Dummy value
-                "is_shutdown_period": self.is_shutdown_period,
-                "next_resume_time": "05:00 IST" if self.is_shutdown_period else "N/A",
-            }
-
-            # Send status update if it's been more than 6 hours
-            if current_time - self.last_health_check > timedelta(hours=6):
-                telegram_notifier.send_system_status(status)
-                self.last_health_check = current_time
-
-            # Log health status
-            logger.info(
-                f"Health check: {today_stats['total_signals']} signals today, {week_stats['total_signals']} this week"
-            )
+            # Check for no signals alert - only once per 6 hours
+            if hasattr(self, 'last_signal_time') and self.last_signal_time:
+                hours_since_signal = (datetime.now() - self.last_signal_time).total_seconds() / 3600
+                if (hours_since_signal > SYSTEM_MONITORING['alert_on_no_signals_hours'] and
+                    (not hasattr(self, 'last_no_signal_alert') or
+                     datetime.now() - self.last_no_signal_alert > timedelta(hours=6))):
+                    telegram_notifier.send_error_alert(
+                        f"No signals generated for {hours_since_signal:.1f} hours",
+                        "Signal Generator"
+                    )
+                    self.last_no_signal_alert = datetime.now()
 
         except Exception as e:
-            logger.error(f"Error in health check: {e}")
-
-    def debug_no_signals(self):
-        """Debug why no signals are being generated"""
-        try:
-            logger.info("🔍 Debugging signal generation...")
-
-            # Test signal generation on major pairs
-            test_symbols = ["BTCUSDT", "ETHUSDT"]
-
-            for symbol in test_symbols:
-                try:
-                    # Test data fetching
-                    df = strategy_ai.get_binance_data(symbol, "4h", limit=100)
-                    logger.info(f"📊 {symbol} data: {len(df)} candles available")
-
-                    if not df.empty:
-                        # Test signal generation
-                        signal = strategy_ai.predict_signal(symbol, "4h")
-                        result = (
-                            f"Generated {signal['signal_type']}"
-                            if signal
-                            else "No signal"
-                        )
-                        logger.info(f"🎯 {symbol} 4h: {result}")
-
-                except Exception as e:
-                    logger.error(f"Error testing {symbol}: {e}")
-
-            # Check market conditions
-            volatility = self.get_simple_market_volatility()
-            if volatility < 0.02:
-                logger.info(
-                    "💡 LOW VOLATILITY DETECTED - This is normal, fewer signals expected"
-                )
-            else:
-                logger.info(f"📈 Normal volatility: {volatility:.4f}")
-
-        except Exception as e:
-            logger.error(f"Error in debug process: {e}")
-
-    def cleanup_old_data(self):
-        """Clean up old data and logs"""
-        try:
-            logger.info("Cleaning up old data...")
-
-            # Clean old signals (keep last 7 days)
-            cutoff_date = datetime.now() - timedelta(days=7)
-            self.signals_today = [
-                s for s in self.signals_today if s["timestamp"] > cutoff_date
-            ]
-
-            # Clean old log files
-            log_file = Path(LOGGING_CONFIG["log_file"])
-            if (
-                log_file.exists()
-                and log_file.stat().st_size
-                > SCHEDULER_CONFIG["max_log_size_mb"] * 1024 * 1024
-            ):
-                # Rotate log file
-                backup_file = log_file.with_suffix(
-                    f'.{datetime.now().strftime("%Y%m%d")}.log'
-                )
-                log_file.rename(backup_file)
-                logger.info(f"Log file rotated to {backup_file}")
-
-            logger.info("Cleanup completed")
-
-        except Exception as e:
-            logger.error(f"Error in cleanup: {e}")
-
-    def send_daily_summary(self):
-        """Send daily trading summary with enhanced stats"""
-        try:
-            today_stats = self.tracker.get_today_stats()
-
-            if today_stats["total_signals"] == 0:
-                logger.info("No signals today, skipping daily summary")
-                return
-
-            logger.info("Sending enhanced daily summary...")
-
-            # USING YOUR EXISTING FUNCTION
-            telegram_notifier.send_daily_summary(self.signals_today, today_stats)
-            logger.info("Enhanced daily summary sent")
-
-        except Exception as e:
-            logger.error(f"Error sending daily summary: {e}")
+            logger.error(f"Error in enhanced health check: {e}")
 
     def _save_signal(self, signal: Dict):
-        """Save signal to JSON file - EXACT SAME AS YOUR EXISTING CODE"""
+        """Save signal to JSON file"""
         try:
             signals_file = self.data_dir / "signals.json"
 
-            # Load existing signals
             signals = []
             if signals_file.exists():
                 with open(signals_file, "r") as f:
                     signals = json.load(f)
 
-            # Add new signal
             signal_data = signal.copy()
             signal_data["timestamp"] = signal["timestamp"].isoformat()
             signals.append(signal_data)
 
-            # Keep only last 1000 signals
             signals = signals[-1000:]
 
-            # Save back to file
             with open(signals_file, "w") as f:
                 json.dump(signals, f, indent=2)
 
@@ -636,7 +562,7 @@ class ProTradeAIBot:
             logger.error(f"Error saving signal: {e}")
 
     def _update_daily_stats(self):
-        """Update daily statistics - EXACT SAME AS YOUR EXISTING CODE"""
+        """Update daily statistics"""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
 
@@ -659,8 +585,43 @@ class ProTradeAIBot:
         except Exception as e:
             logger.error(f"Error updating daily stats: {e}")
 
+    def cleanup_old_data(self):
+        """Clean up old data and logs"""
+        try:
+            logger.info("Cleaning up old data...")
+
+            cutoff_date = datetime.now() - timedelta(days=7)
+            self.signals_today = [
+                s for s in self.signals_today if s["timestamp"] > cutoff_date
+            ]
+
+            log_file = Path(LOGGING_CONFIG["log_file"])
+            if (log_file.exists() and 
+                log_file.stat().st_size > SCHEDULER_CONFIG["max_log_size_mb"] * 1024 * 1024):
+                backup_file = log_file.with_suffix(f'.{datetime.now().strftime("%Y%m%d")}.log')
+                log_file.rename(backup_file)
+                logger.info(f"Log file rotated to {backup_file}")
+
+        except Exception as e:
+            logger.error(f"Error in cleanup: {e}")
+
+    def send_daily_summary(self):
+        """Send daily trading summary"""
+        try:
+            today_stats = self.tracker.get_today_stats()
+
+            if today_stats["total_signals"] == 0:
+                logger.info("No signals today, skipping daily summary")
+                return
+
+            logger.info("Sending daily summary...")
+            telegram_notifier.send_daily_summary(self.signals_today, today_stats)
+
+        except Exception as e:
+            logger.error(f"Error sending daily summary: {e}")
+
     def get_status(self) -> Dict:
-        """Get current bot status with enhanced tracking"""
+        """Get current bot status"""
         today_stats = self.tracker.get_today_stats()
         week_stats = self.tracker.get_week_stats()
 
@@ -675,20 +636,10 @@ class ProTradeAIBot:
             "last_health_check": self.last_health_check.isoformat(),
             "daily_stats": self.daily_stats,
             "scheduler_jobs": len(self.scheduler.get_jobs()),
-            "next_quick_scan": self.scheduler.get_job(
-                "quick_scan"
-            ).next_run_time.isoformat()
-            if self.scheduler.get_job("quick_scan")
-            else None,
-            "next_full_scan": self.scheduler.get_job(
-                "full_scan"
-            ).next_run_time.isoformat()
-            if self.scheduler.get_job("full_scan")
-            else None,
         }
 
     def start(self):
-        """Start the trading bot with enhanced monitoring"""
+        """🔧 FIX: Start bot with controlled notifications"""
         try:
             logger.info("Starting ProTradeAI Pro+ Bot...")
 
@@ -697,14 +648,14 @@ class ProTradeAIBot:
                 logger.error("Configuration validation failed")
                 return False
 
-            # Setup scheduler jobs
+            # Setup scheduler
             logger.info("Setting up scheduler...")
 
-            # MODIFY the scheduler intervals:
-            quick_interval = 2 if self.emergency_mode else 3  # More aggressive
-            full_interval = 5 if self.emergency_mode else 8   # More aggressive
+            # 🔧 FIX: More reasonable intervals for production
+            quick_interval = 3 if self.emergency_mode else 5
+            full_interval = 8 if self.emergency_mode else 15
 
-            # Quick market scan (every quick_interval minutes)
+            # Quick market scan
             self.scheduler.add_job(
                 func=self.quick_market_scan,
                 trigger=IntervalTrigger(minutes=quick_interval),
@@ -714,7 +665,7 @@ class ProTradeAIBot:
                 replace_existing=True,
             )
 
-            # Full market scan (every full_interval minutes with cron)
+            # Full market scan
             self.scheduler.add_job(
                 func=self.full_market_scan,
                 trigger=IntervalTrigger(minutes=full_interval),
@@ -724,37 +675,37 @@ class ProTradeAIBot:
                 replace_existing=True,
             )
 
-            # Shutdown status check (every 5 minutes)
+            # Shutdown check (less frequent)
             self.scheduler.add_job(
                 func=self.check_shutdown_status,
-                trigger=IntervalTrigger(minutes=5),
+                trigger=IntervalTrigger(minutes=15),
                 id="shutdown_check",
                 name="Shutdown Status Check",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # REPLACE the existing health_check job with enhanced_health_check
+            # Enhanced health check
             self.scheduler.add_job(
-                func=self.enhanced_health_check,  # CHANGED from self.health_check
-                trigger=IntervalTrigger(minutes=10),
+                func=self.enhanced_health_check,
+                trigger=IntervalTrigger(minutes=30),  # Less frequent
                 id="health_check",
-                name="Enhanced Health Check",  # UPDATED name
+                name="Enhanced Health Check",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Cleanup (every hour)
+            # Cleanup (every 2 hours)
             self.scheduler.add_job(
                 func=self.cleanup_old_data,
-                trigger=IntervalTrigger(hours=1),
+                trigger=IntervalTrigger(hours=2),
                 id="cleanup",
                 name="Data Cleanup",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Daily summary (at 23:30 IST)
+            # Daily summary
             self.scheduler.add_job(
                 func=self.send_daily_summary,
                 trigger=CronTrigger(hour=23, minute=30, timezone=self.timezone),
@@ -772,37 +723,31 @@ class ProTradeAIBot:
             self.check_shutdown_status()
 
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
-            logger.info(
-                f"📊 Monitoring {len(SYMBOLS)} symbols on {len(TIMEFRAMES)} timeframes"
-            )
-            logger.info(f"⚡ Quick scans every {quick_interval} minutes")
-            logger.info(f"🔍 Full scans every {full_interval} minutes")
-            logger.info("🌙 Auto shutdown: 1-5 AM IST")
-            logger.info(
-                f"💰 Risk per trade: {RISK_PER_TRADE*100:.1f}% of ${CAPITAL:,.2f}"
-            )
 
-            # Send startup notification
-            current_status = (
-                "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"
-            )
-            today_stats = self.tracker.get_today_stats()
+            # 🔧 FIX: Only send startup notification if appropriate
+            if self.should_send_startup_notification():
+                today_stats = self.tracker.get_today_stats()
+                current_status = "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"
 
-            telegram_notifier.send_message(
-                f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
-                f"✅ Bot is now running with enhanced tracking\n"
-                f"📊 Monitoring {len(SYMBOLS)} symbols\n"
-                f"⚡ Quick scans: Every {quick_interval} minutes\n"
-                f"🔍 Full scans: Every {full_interval} minutes\n"
-                f"🌙 Auto shutdown: 1-5 AM IST\n"
-                f"💰 Capital: ${CAPITAL:,.2f}\n"
-                f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n"
-                f"📈 Status: {current_status}\n\n"
-                f"📊 <b>Today's Activity:</b>\n"
-                f"🔸 Signals: {today_stats['total_signals']}\n"
-                f"🔸 Avg Confidence: {today_stats['avg_confidence']:.1f}%\n\n"
-                f"<i>Ready to generate profitable signals! 🚀</i>"
-            )
+                telegram_notifier.send_message(
+                    f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
+                    f"✅ Bot is now running with enhanced tracking\n"
+                    f"📊 Monitoring {len(SYMBOLS)} symbols\n"
+                    f"⚡ Quick scans: Every {quick_interval} minutes\n"
+                    f"🔍 Full scans: Every {full_interval} minutes\n"
+                    f"🌙 Auto shutdown: 1-5 AM IST\n"
+                    f"💰 Capital: ${CAPITAL:,.2f}\n"
+                    f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n"
+                    f"📈 Status: {current_status}\n\n"
+                    f"📊 <b>Today's Activity:</b>\n"
+                    f"🔸 Signals: {today_stats['total_signals']}\n"
+                    f"🔸 Avg Confidence: {today_stats['avg_confidence']:.1f}%\n\n"
+                    f"<i>Ready to generate profitable signals! 🚀</i>"
+                )
+                
+                self.startup_count_today += 1
+                self.last_startup_notification = datetime.now().isoformat()
+                self.save_notification_state()
 
             return True
 
@@ -811,7 +756,7 @@ class ProTradeAIBot:
             return False
 
     def stop(self):
-        """Stop the trading bot"""
+        """🔧 FIX: Stop bot with controlled notifications"""
         try:
             logger.info("Stopping ProTradeAI Pro+ Bot...")
 
@@ -820,18 +765,20 @@ class ProTradeAIBot:
 
             self.is_running = False
 
-            # Send shutdown notification
+            # 🔧 FIX: Only send stop notification occasionally  
             uptime = datetime.now() - self.start_time
             today_stats = self.tracker.get_today_stats()
 
-            telegram_notifier.send_message(
-                f"🛑 <b>ProTradeAI Pro+ Stopped</b>\n\n"
-                f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
-                f"📊 Signals today: {today_stats['total_signals']}\n"
-                f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
-                f"💼 Sessions completed: {len(self.daily_stats)}\n\n"
-                f"<i>Bot has been shut down gracefully with tracking saved.</i>"
-            )
+            # Don't spam stop notifications - only if uptime > 5 minutes
+            if uptime > timedelta(minutes=5):
+                telegram_notifier.send_message(
+                    f"🛑 <b>ProTradeAI Pro+ Stopped</b>\n\n"
+                    f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
+                    f"📊 Signals today: {today_stats['total_signals']}\n"
+                    f"📈 Avg confidence: {today_stats['avg_confidence']:.1f}%\n"
+                    f"💼 Sessions completed: {len(self.daily_stats)}\n\n"
+                    f"<i>Bot has been shut down gracefully with tracking saved.</i>"
+                )
 
             logger.info("✅ ProTradeAI Pro+ Bot stopped successfully")
 
@@ -846,7 +793,6 @@ class ProTradeAIBot:
         try:
             logger.info("Bot is running... Press Ctrl+C to stop")
 
-            # Keep the main thread alive
             while self.is_running:
                 time.sleep(1)
 
@@ -855,63 +801,21 @@ class ProTradeAIBot:
         finally:
             self.stop()
 
-
-    def enhanced_health_check(self):
-        """Enhanced system health check with resource monitoring"""
-        try:
-            import psutil
-
-            # Memory monitoring
-            process = psutil.Process()
-            memory_mb = process.memory_info().rss / 1024 / 1024
-            cpu_percent = process.cpu_percent()
-
-            # Check thresholds
-            from config import PRODUCTION_LIMITS, SYSTEM_MONITORING
-            if memory_mb > PRODUCTION_LIMITS['max_memory_mb']:
-                if getattr(self, "memory_alerts_sent", 0) < 3:
-                    telegram_notifier.send_error_alert(
-                        f"High memory usage: {memory_mb:.1f}MB (limit: {PRODUCTION_LIMITS['max_memory_mb']}MB)",
-                        "System Monitor"
-                    )
-                    self.memory_alerts_sent = getattr(self, "memory_alerts_sent", 0) + 1
-
-            if cpu_percent > PRODUCTION_LIMITS['max_cpu_percent']:
-                logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
-
-            # Check for no signals alert
-            if hasattr(self, 'last_signal_time') and self.last_signal_time:
-                hours_since_signal = (datetime.now() - self.last_signal_time).total_seconds() / 3600
-                if hours_since_signal > SYSTEM_MONITORING['alert_on_no_signals_hours']:
-                    telegram_notifier.send_error_alert(
-                        f"No signals generated for {hours_since_signal:.1f} hours",
-                        "Signal Generator"
-                    )
-
-            logger.info("Enhanced health check completed")
-
-        except Exception as e:
-            logger.error(f"Error in enhanced health check: {e}")
-
 def main():
     """Main entry point"""
     print("🤖 ProTradeAI Pro+ Trading Bot v2.0")
     print("=" * 50)
 
-    # Create and run bot
     bot = ProTradeAIBot()
 
-    # Run based on command line arguments
     if len(sys.argv) > 1:
         command = sys.argv[1].lower()
 
         if command == "test":
-            # Test mode - run one scan
             print("🧪 Running in test mode...")
             if bot.validate_configuration():
                 bot.quick_market_scan()
 
-                # Show performance stats
                 today_stats = bot.tracker.get_today_stats()
                 week_stats = bot.tracker.get_week_stats()
 
@@ -925,7 +829,6 @@ def main():
                 print("❌ Configuration validation failed")
 
         elif command == "status":
-            # Status check
             print("📊 Bot Status:")
             status = bot.get_status()
             print(f"   Running: {status['is_running']}")
@@ -934,7 +837,6 @@ def main():
             print(f"   Avg Confidence: {status['avg_confidence_today']:.1f}%")
 
         elif command == "scan":
-            # Manual full scan
             print("🔍 Running manual full scan...")
             if bot.validate_configuration():
                 bot.full_market_scan()
@@ -948,7 +850,6 @@ def main():
     else:
         # Normal operation
         bot.run_forever()
-
 
 if __name__ == "__main__":
     main()
