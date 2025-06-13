@@ -45,7 +45,8 @@ from config import (
     get_confidence_grade,
     MARKET_CONDITIONS,
     CAPITAL,
-    RISK_PER_TRADE
+    RISK_PER_TRADE,
+    EMERGENCY_MODE  # ADD THIS LINE
 )
 
 # Setup logging
@@ -223,7 +224,11 @@ class StrategyAI:
         self.model = None
         self.feature_columns = None
         self.last_signals = {}
-        
+
+        # ADD THESE 3 LINES:
+        self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
+        self.signals_generated_today = 0
+
         # Add simple signal tracking
         self.signal_tracker = SimpleSignalTracker()
         
@@ -232,6 +237,10 @@ class StrategyAI:
         
         # Load or create model
         self.load_or_create_model()
+        
+        # ADD THIS LINE:
+        if self.emergency_mode:
+            logger.warning("🚨 EMERGENCY MODE ACTIVE - Relaxed thresholds for testing")
         
     def load_or_create_model(self):
         """Load existing model or create new one with REAL data"""
@@ -768,53 +777,141 @@ class StrategyAI:
             logger.error(f"Error calculating SL/TP: {e}")
             return {}
     
+    def _get_adaptive_confidence_threshold(self) -> float:
+        """Get adaptive confidence threshold - ULTRA LOW for testing"""
+        try:
+            if self.emergency_mode:
+                return 10  # ULTRA LOW - almost any signal passes
+
+            # Even non-emergency is more aggressive
+            return 20  # Much lower than before
+
+        except Exception:
+            return 15  # Ultra low fallback
+    
+    def _emergency_signal_override(self, symbol: str, timeframe: str, df: pd.DataFrame) -> Optional[Dict]:
+        """Generate a signal even if normal logic says no - FOR TESTING ONLY"""
+        try:
+            if not self.emergency_mode:
+                return None
+
+            logger.warning(f"🚨 EMERGENCY OVERRIDE: Forcing signal for {symbol} {timeframe}")
+
+            # Get basic indicators
+            rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 50
+            price = df['close'].iloc[-1]
+
+            # Force a signal based on simple RSI logic
+            if rsi < 40:
+                signal_type = 'LONG'
+                confidence = min(45, rsi + 10)  # Low but valid confidence
+            elif rsi > 60:
+                signal_type = 'SHORT'
+                confidence = min(45, 110 - rsi)  # Low but valid confidence
+            else:
+                # Even neutral RSI gets a signal in emergency mode
+                signal_type = 'LONG' if rsi <= 50 else 'SHORT'
+                confidence = 25  # Minimum confidence
+
+            # Calculate basic SL/TP
+            leverage = 2  # Conservative in emergency mode
+            sl_tp_data = self.calculate_sl_tp(df, signal_type, timeframe, leverage)
+
+            signal = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'signal_type': signal_type,
+                'confidence': confidence,
+                'confidence_grade': get_confidence_grade(confidence),
+                'leverage': leverage,
+                'timestamp': datetime.now(),
+                'current_price': price,
+                'rsi': rsi,
+                'macd': df.get('macd', [0]).iloc[-1] if not df.empty else 0,
+                'atr': df.get('atr', [0]).iloc[-1] if not df.empty else 0,
+                'volume_ratio': df.get('volume_ratio', [1]).iloc[-1] if not df.empty else 1,
+                'volatility': 0.02,  # Default
+                'emergency_override': True,  # Mark as emergency signal
+                **sl_tp_data
+            }
+
+            logger.warning(f"🚨 EMERGENCY SIGNAL: {symbol} {signal_type} {confidence:.1f}%")
+            return signal
+
+        except Exception as e:
+            logger.error(f"Emergency override error: {e}")
+            return None
+
     def predict_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
-        """Generate trading signal - MAIN FUNCTION USED BY EXISTING CODE"""
+        """Generate trading signal - ENHANCED with emergency override"""
         try:
             # Cooldown check
             signal_key = f"{symbol}_{timeframe}"
             if signal_key in self.last_signals:
                 last_time = self.last_signals[signal_key]
-                cooldown_minutes = 45 if timeframe == '1h' else 60
+                cooldown_minutes = 20 if timeframe == '1h' else 30  # Reduced from 45-60
                 if datetime.now() - last_time < timedelta(minutes=cooldown_minutes):
                     return None
-            
+
             # Get market data
             df = self.get_binance_data(symbol, timeframe)
             if df.empty or len(df) < MODEL_CONFIG['feature_window']:
+                # 🚨 EMERGENCY MODE: Try to force a signal if normal logic fails
+                if self.emergency_mode and EMERGENCY_MODE.get('force_signals', False):
+                    emergency_signal = self._emergency_signal_override(symbol, timeframe, df)
+                    if emergency_signal:
+                        tracking_id = self.signal_tracker.add_signal(emergency_signal)
+                        emergency_signal['tracking_id'] = tracking_id
+                        self.signals_generated_today += 1
+                        return emergency_signal
                 return None
-            
+
             # Calculate indicators
             df = self.calculate_technical_indicators(df)
-            
+
             # Prepare features
             features = self.prepare_features(df)
             if features.size == 0:
+                if self.emergency_mode and EMERGENCY_MODE.get('force_signals', False):
+                    emergency_signal = self._emergency_signal_override(symbol, timeframe, df)
+                    if emergency_signal:
+                        tracking_id = self.signal_tracker.add_signal(emergency_signal)
+                        emergency_signal['tracking_id'] = tracking_id
+                        self.signals_generated_today += 1
+                        return emergency_signal
                 return None
-            
+
             # Get prediction
             prediction = self.model.predict(features)[0]
             probabilities = self.model.predict_proba(features)[0]
-            
+
             signal_map = {0: 'HOLD', 1: 'LONG', 2: 'SHORT'}
             signal_type = signal_map[prediction]
             confidence = max(probabilities) * 100
-            
+
             # Apply confidence threshold with market adaptation
             min_confidence = self._get_adaptive_confidence_threshold()
-            
+
             if signal_type == 'HOLD' or confidence < min_confidence:
+                if self.emergency_mode and EMERGENCY_MODE.get('force_signals', False):
+                    emergency_signal = self._emergency_signal_override(symbol, timeframe, df)
+                    if emergency_signal:
+                        tracking_id = self.signal_tracker.add_signal(emergency_signal)
+                        emergency_signal['tracking_id'] = tracking_id
+                        self.signals_generated_today += 1
+                        return emergency_signal
                 return None
-            
+
             # Calculate leverage and SL/TP
             leverage = self.calculate_leverage(df, confidence)
             sl_tp_data = self.calculate_sl_tp(df, signal_type, timeframe, leverage)
-            
+
             # Enhanced signal validation
             if not self._validate_signal_quality(df, signal_type, confidence):
-                logger.info(f"Signal quality validation failed for {symbol} {timeframe}")
-                return None
-            
+                logger.debug(f"Signal quality validation failed for {symbol} {timeframe}")
+                if not self.emergency_mode:  # Skip validation in emergency mode
+                    return None
+
             # Create signal
             signal = {
                 'symbol': symbol,
@@ -832,67 +929,49 @@ class StrategyAI:
                 'volatility': df['volatility'].iloc[-1],
                 **sl_tp_data
             }
-            
+
             # Add to tracking
             tracking_id = self.signal_tracker.add_signal(signal)
             signal['tracking_id'] = tracking_id
-            
+
             # Update cooldown
             self.last_signals[signal_key] = datetime.now()
-            
-            logger.info(f"✅ Signal generated: {symbol} {timeframe} {signal_type} {confidence:.1f}%")
+
+            # Track daily signals
+            self.signals_generated_today += 1
+
+            logger.info(f"✅ SIGNAL GENERATED: {symbol} {timeframe} {signal_type} {confidence:.1f}% (#{self.signals_generated_today} today)")
             return signal
-            
+
         except Exception as e:
             logger.error(f"Error generating signal for {symbol} {timeframe}: {e}")
             return None
     
-    def _get_adaptive_confidence_threshold(self) -> float:
-        """Get adaptive confidence threshold based on market conditions"""
-        try:
-            # Get recent performance
-            performance = self.signal_tracker.get_performance_metrics(days=7)
-            
-            # Base threshold
-            base_threshold = CONFIDENCE_THRESHOLDS['MIN_SIGNAL']
-            
-            # Adjust based on recent performance
-            if performance['total_signals'] >= 5:
-                win_rate = performance['win_rate']
-                if win_rate < 40:
-                    # Poor performance, raise threshold
-                    return min(75, base_threshold + 15)
-                elif win_rate > 70:
-                    # Good performance, lower threshold slightly
-                    return max(45, base_threshold - 5)
-            
-            return base_threshold
-            
-        except Exception:
-            return CONFIDENCE_THRESHOLDS['MIN_SIGNAL']
-    
     def _validate_signal_quality(self, df: pd.DataFrame, signal_type: str, confidence: float) -> bool:
-        """Validate signal quality before sending"""
+        """Validate signal quality - MUCH MORE RELAXED"""
         try:
-            # RSI validation
+            if self.emergency_mode:
+                return True  # Skip all validation in emergency mode
+
+            # Much more relaxed RSI validation
             rsi = df['rsi'].iloc[-1]
-            if signal_type == 'LONG' and rsi > 75:
-                return False  # Don't buy when heavily overbought
-            if signal_type == 'SHORT' and rsi < 25:
-                return False  # Don't sell when heavily oversold
-            
-            # Volume validation
-            volume_ratio = df['volume_ratio'].iloc[-1]
-            if volume_ratio < 0.5:
-                return False  # Require decent volume
-            
-            # Volatility validation
-            volatility = df['volatility'].iloc[-1]
-            if volatility > 0.1:  # Too volatile
+            if signal_type == 'LONG' and rsi > 85:  # Raised from 75
                 return False
-            
+            if signal_type == 'SHORT' and rsi < 15:  # Lowered from 25
+                return False
+
+            # More relaxed volume validation
+            volume_ratio = df['volume_ratio'].iloc[-1]
+            if volume_ratio < 0.3:  # Lowered from 0.5
+                return False
+
+            # More relaxed volatility validation
+            volatility = df['volatility'].iloc[-1]
+            if volatility > 0.15:  # Raised from 0.1
+                return False
+
             return True
-            
+
         except Exception:
             return True  # Default to allowing signal if validation fails
     
@@ -977,6 +1056,317 @@ class StrategyAI:
         except Exception as e:
             logger.error(f"Error in debug: {e}")
             return {'error': str(e)}
+
+    # --- STEP 2: Enhanced Strategy AI for Market Regime Detection ---
+
+    def detect_market_regime(self, df: pd.DataFrame, timeframe: str) -> str:
+        """Detect current market regime: BULL, BEAR, or SIDEWAYS"""
+        try:
+            if len(df) < 20:
+                return 'UNKNOWN'
+            
+            # Calculate trend strength over different periods
+            short_ema = df['close'].ewm(span=8).mean()
+            long_ema = df['close'].ewm(span=21).mean()
+            
+            # Price movement analysis
+            recent_high = df['high'].rolling(20).max().iloc[-1]
+            recent_low = df['low'].rolling(20).min().iloc[-1]
+            current_price = df['close'].iloc[-1]
+            
+            # Calculate position in range
+            range_position = (current_price - recent_low) / (recent_high - recent_low)
+            
+            # Trend direction
+            ema_diff = (short_ema.iloc[-1] - long_ema.iloc[-1]) / current_price
+            ema_slope = (short_ema.iloc[-1] - short_ema.iloc[-5]) / current_price if len(short_ema) > 5 else 0
+            
+            # Bollinger Band squeeze detection
+            if 'bb_upper' in df.columns and 'bb_lower' in df.columns and 'bb_middle' in df.columns:
+                bb_width = (df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1]) / df['bb_middle'].iloc[-1]
+            else:
+                bb_width = 0.1  # Default if BB not present
+            
+            # Volatility analysis
+            volatility = df['volatility'].iloc[-1] if 'volatility' in df.columns else 0.02
+
+            # Configs (add these to your config.py as needed)
+            MARKET_REGIME_CONFIG = {
+                'bb_squeeze_threshold': 0.055
+            }
+            # Use existing MARKET_CONDITIONS from config.py
+
+            # Market regime logic
+            if bb_width < MARKET_REGIME_CONFIG['bb_squeeze_threshold']:
+                return 'SIDEWAYS'
+            elif abs(ema_diff) < MARKET_CONDITIONS.get('sideways_market_range', 0.025) and volatility < 0.04:
+                return 'SIDEWAYS'
+            elif ema_diff > 0.02 and ema_slope > 0.01:
+                return 'BULL'
+            elif ema_diff < -0.02 and ema_slope < -0.01:
+                return 'BEAR'
+            else:
+                return 'SIDEWAYS'
+        except Exception as e:
+            logger.error(f"Error detecting market regime: {e}")
+            return 'UNKNOWN'
+
+    def get_regime_specific_threshold(self, regime: str, base_confidence: float) -> float:
+        """Adjust confidence threshold based on market regime"""
+        try:
+            adjustments = {
+                'BULL': -5,      # Easier to get long signals in bull market
+                'BEAR': -5,      # Easier to get short signals in bear market  
+                'SIDEWAYS': -10, # More opportunities in sideways market
+                'UNKNOWN': 0     # No adjustment
+            }
+            adjustment = adjustments.get(regime, 0)
+            return max(25, base_confidence + adjustment)
+        except Exception:
+            return base_confidence
+
+    def generate_sideways_signal(self, df: pd.DataFrame, symbol: str, timeframe: str) -> Optional[Dict]:
+        """Generate high-quality sideways market signals"""
+        try:
+            # Support and resistance levels
+            recent_high = df['high'].rolling(20).max().iloc[-1]
+            recent_low = df['low'].rolling(20).min().iloc[-1]
+            current_price = df['close'].iloc[-1]
+            
+            # Range position (0 = at support, 1 = at resistance)
+            range_position = (current_price - recent_low) / (recent_high - recent_low)
+            
+            # RSI for mean reversion
+            rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 50
+            
+            # Volume confirmation
+            volume_ratio = df['volume_ratio'].iloc[-1] if 'volume_ratio' in df.columns else 1.0
+            
+            # Range trading signals
+            signal_type = None
+            confidence = 0
+            
+            # Buy near support
+            if range_position < 0.25 and rsi < 40 and volume_ratio > 0.8:
+                signal_type = 'LONG'
+                confidence = 55 + (40 - rsi) * 0.5  # Higher confidence for lower RSI
+            # Sell near resistance  
+            elif range_position > 0.75 and rsi > 60 and volume_ratio > 0.8:
+                signal_type = 'SHORT'
+                confidence = 55 + (rsi - 60) * 0.5  # Higher confidence for higher RSI
+            # Mean reversion from extremes
+            elif rsi < 25:
+                signal_type = 'LONG'
+                confidence = 65 + (25 - rsi) * 1.0
+            elif rsi > 75:
+                signal_type = 'SHORT' 
+                confidence = 65 + (rsi - 75) * 1.0
+            
+            # Use config threshold
+            RANGE_TRADING_MIN = CONFIDENCE_THRESHOLDS.get('RANGE_TRADING_MIN', 50)
+            if signal_type and confidence >= RANGE_TRADING_MIN:
+                # Calculate range-specific SL/TP
+                range_size = recent_high - recent_low
+                if signal_type == 'LONG':
+                    sl_price = current_price - (range_size * 0.3)  # 30% of range
+                    tp_price = recent_high * 0.98  # Near resistance
+                else:
+                    sl_price = current_price + (range_size * 0.3)
+                    tp_price = recent_low * 1.02   # Near support
+                leverage = min(4, max(2, int(confidence / 15)))  # Conservative leverage
+                signal = {
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'signal_type': signal_type,
+                    'confidence': confidence,
+                    'confidence_grade': get_confidence_grade(confidence),
+                    'leverage': leverage,
+                    'timestamp': datetime.now(),
+                    'current_price': current_price,
+                    'market_regime': 'SIDEWAYS',
+                    'strategy_type': f'RANGE_{signal_type}',
+                    'range_position': range_position,
+                    'support_level': recent_low,
+                    'resistance_level': recent_high,
+                    'range_size_pct': (range_size / current_price) * 100,
+                    'sl_price': sl_price,
+                    'tp_price': tp_price,
+                    'rsi': rsi,
+                    'volume_ratio': volume_ratio,
+                }
+                return signal
+            return None
+        except Exception as e:
+            logger.error(f"Error generating sideways signal: {e}")
+            return None
+
+    def predict_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        """Enhanced signal generation with market regime detection"""
+        try:
+            # Cooldown check (production settings)
+            signal_key = f"{symbol}_{timeframe}"
+            if not self.emergency_mode and signal_key in self.last_signals:
+                last_time = self.last_signals[signal_key]
+                cooldown_minutes = 30 if timeframe == '1h' else 45  # Production cooldowns
+                if datetime.now() - last_time < timedelta(minutes=cooldown_minutes):
+                    return None
+
+            # Get market data
+            df = self.get_binance_data(symbol, timeframe)
+            if df.empty or len(df) < MODEL_CONFIG['feature_window']:
+                return None
+
+            # Calculate indicators
+            df = self.calculate_technical_indicators(df)
+            
+            # Detect market regime
+            market_regime = self.detect_market_regime(df, timeframe)
+            
+            # Try sideways-specific signals first
+            if market_regime == 'SIDEWAYS':
+                sideways_signal = self.generate_sideways_signal(df, symbol, timeframe)
+                if sideways_signal:
+                    # Add tracking and return
+                    tracking_id = self.signal_tracker.add_signal(sideways_signal)
+                    sideways_signal['tracking_id'] = tracking_id
+                    self.last_signals[signal_key] = datetime.now()
+                    self.signals_generated_today += 1
+                    logger.info(f"✅ SIDEWAYS SIGNAL: {symbol} {sideways_signal['signal_type']} {sideways_signal['confidence']:.1f}%")
+                    return sideways_signal
+
+            # Regular ML-based signals for trending markets
+            features = self.prepare_features(df)
+            if features.size == 0:
+                return None
+
+            # Get ML prediction
+            prediction = self.model.predict(features)[0]
+            probabilities = self.model.predict_proba(features)[0]
+
+            signal_map = {0: 'HOLD', 1: 'LONG', 2: 'SHORT'}
+            signal_type = signal_map[prediction]
+            base_confidence = max(probabilities) * 100
+
+            # Get regime-adjusted threshold
+            base_threshold = CONFIDENCE_THRESHOLDS.get('MIN_SIGNAL', 30)
+            adjusted_threshold = self.get_regime_specific_threshold(market_regime, base_threshold)
+
+            if signal_type == 'HOLD' or base_confidence < adjusted_threshold:
+                return None
+
+            # Enhanced validation for production
+            if not self._validate_signal_quality_production(df, signal_type, base_confidence, market_regime):
+                return None
+
+            # Calculate leverage based on market regime
+            leverage = self.calculate_regime_leverage(df, base_confidence, market_regime)
+            sl_tp_data = self.calculate_sl_tp(df, signal_type, timeframe, leverage)
+
+            # Create enhanced signal
+            signal = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'signal_type': signal_type,
+                'confidence': base_confidence,
+                'confidence_grade': get_confidence_grade(base_confidence),
+                'leverage': leverage,
+                'timestamp': datetime.now(),
+                'current_price': df['close'].iloc[-1],
+                'market_regime': market_regime,
+                'strategy_type': f'{market_regime}_{signal_type}',
+                'rsi': df['rsi'].iloc[-1],
+                'macd': df['macd'].iloc[-1],
+                'atr': df['atr'].iloc[-1],
+                'volume_ratio': df['volume_ratio'].iloc[-1],
+                'volatility': df['volatility'].iloc[-1],
+                **sl_tp_data
+            }
+
+            # Add to tracking
+            tracking_id = self.signal_tracker.add_signal(signal)
+            signal['tracking_id'] = tracking_id
+            self.last_signals[signal_key] = datetime.now()
+            self.signals_generated_today += 1
+
+            logger.info(f"✅ {market_regime} SIGNAL: {symbol} {signal_type} {base_confidence:.1f}%")
+            return signal
+
+        except Exception as e:
+            logger.error(f"Error generating signal for {symbol} {timeframe}: {e}")
+            return None
+
+    def _validate_signal_quality_production(self, df: pd.DataFrame, signal_type: str, confidence: float, regime: str) -> bool:
+        """Production-quality signal validation"""
+        try:
+            # Use config values or defaults
+            SIGNAL_QUALITY_CONFIG = {
+                'min_volume_ratio': 0.4,
+                'max_volatility': 0.15,
+                'rsi_overbought': 85,
+                'rsi_oversold': 15,
+                'min_atr_movement': 0.15
+            }
+            # Volume validation
+            volume_ratio = df['volume_ratio'].iloc[-1] if 'volume_ratio' in df.columns else 1.0
+            if volume_ratio < SIGNAL_QUALITY_CONFIG['min_volume_ratio']:
+                return False
+
+            # Volatility validation
+            volatility = df['volatility'].iloc[-1] if 'volatility' in df.columns else 0.02
+            if volatility > SIGNAL_QUALITY_CONFIG['max_volatility']:
+                return False
+
+            # RSI validation (regime-specific)
+            rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else 50
+            if regime == 'SIDEWAYS':
+                # More lenient for sideways markets
+                if signal_type == 'LONG' and rsi > 65:
+                    return False
+                if signal_type == 'SHORT' and rsi < 35:
+                    return False
+            else:
+                # Stricter for trending markets
+                if signal_type == 'LONG' and rsi > SIGNAL_QUALITY_CONFIG['rsi_overbought']:
+                    return False
+                if signal_type == 'SHORT' and rsi < SIGNAL_QUALITY_CONFIG['rsi_oversold']:
+                    return False
+
+            # ATR movement validation
+            atr = df['atr'].iloc[-1] if 'atr' in df.columns else 0.0
+            price = df['close'].iloc[-1]
+            atr_pct = (atr / price) * 100 if price else 0
+            if atr_pct < SIGNAL_QUALITY_CONFIG['min_atr_movement']:
+                return False
+
+            return True
+        except Exception:
+            return True
+
+    def calculate_regime_leverage(self, df: pd.DataFrame, confidence: float, regime: str) -> int:
+        """Calculate leverage based on market regime and conditions"""
+        try:
+            volatility = df['volatility'].iloc[-1] if 'volatility' in df.columns else 0.02
+            # Use config or fallback
+            LEVERAGE_CONFIG = {
+                'moderate': {'max': 6},
+                'sideways_market_max': 4,
+                'trending_market_max': 6,
+                'high_volatility_max': 3
+            }
+            base_leverage = 2
+            max_leverage = LEVERAGE_CONFIG['moderate']['max']
+            if regime == 'SIDEWAYS':
+                max_leverage = LEVERAGE_CONFIG.get('sideways_market_max', 4)
+            elif regime in ['BULL', 'BEAR']:
+                max_leverage = LEVERAGE_CONFIG.get('trending_market_max', 6)
+            if volatility > MARKET_CONDITIONS.get('high_volatility_threshold', 0.08):
+                max_leverage = min(max_leverage, LEVERAGE_CONFIG.get('high_volatility_max', 3))
+            confidence_factor = min(confidence / 100, 1.0)
+            volatility_factor = max(0.5, 1 - (volatility * 10))
+            leverage = base_leverage + (max_leverage - base_leverage) * confidence_factor * volatility_factor
+            return max(2, min(max_leverage, int(leverage)))
+        except Exception:
+            return 2
 
 # Global strategy instance
 strategy_ai = StrategyAI()

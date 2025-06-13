@@ -35,6 +35,7 @@ from config import (
     LOGGING_CONFIG,
     SCHEDULER_CONFIG,
     validate_config,
+    EMERGENCY_MODE,  # ADD THIS LINE
 )
 from strategy_ai import strategy_ai
 from notifier import telegram_notifier
@@ -190,6 +191,11 @@ class ProTradeAIBot:
         self.daily_stats = {}
         self.last_health_check = datetime.now()
 
+        # ADD THESE LINES:
+        self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
+        self.scan_count = 0
+        self.last_signal_time = None
+
         # Simple performance tracking
         self.tracker = SimplePerformanceTracker()
 
@@ -204,6 +210,9 @@ class ProTradeAIBot:
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
 
+        if self.emergency_mode:
+            logger.warning("🚨 EMERGENCY MODE ACTIVE - Aggressive scanning enabled")
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
@@ -211,7 +220,11 @@ class ProTradeAIBot:
         sys.exit(0)
 
     def is_shutdown_time(self) -> bool:
-        """Check if current time is in shutdown period (1 AM - 5 AM IST)"""
+        """Check if current time is in shutdown period - DISABLED for testing"""
+        # ADD THIS LINE:
+        if self.emergency_mode:
+            return False
+
         try:
             current_time = datetime.now(self.timezone)
             current_hour = current_time.hour
@@ -324,13 +337,15 @@ class ProTradeAIBot:
             return 0.05
 
     def quick_market_scan(self):
-        """Enhanced market scan with your existing strategy_ai functions"""
+        """Enhanced market scan with more aggressive settings"""
         try:
             if self.is_shutdown_period:
                 logger.info("Skipping quick scan - in shutdown period")
                 return
 
-            logger.info("🔍 Starting enhanced market scan...")
+            # ADD THESE LINES:
+            self.scan_count += 1
+            logger.info(f"🔍 Quick scan #{self.scan_count} - Emergency mode: {self.emergency_mode}")
 
             # Check overall market conditions
             market_volatility = self.get_simple_market_volatility()
@@ -677,20 +692,24 @@ class ProTradeAIBot:
             # Setup scheduler jobs
             logger.info("Setting up scheduler...")
 
-            # Quick market scan (every 5 minutes)
+            # MODIFY the scheduler intervals:
+            quick_interval = 2 if self.emergency_mode else 3  # More aggressive
+            full_interval = 5 if self.emergency_mode else 8   # More aggressive
+
+            # Quick market scan (every quick_interval minutes)
             self.scheduler.add_job(
                 func=self.quick_market_scan,
-                trigger=IntervalTrigger(minutes=5),
+                trigger=IntervalTrigger(minutes=quick_interval),
                 id="quick_scan",
                 name="Quick Market Scanner",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Full market scan (every 15 minutes with cron)
+            # Full market scan (every full_interval minutes with cron)
             self.scheduler.add_job(
                 func=self.full_market_scan,
-                trigger=CronTrigger(minute="*/15"),  # Cron: every 15 minutes
+                trigger=IntervalTrigger(minutes=full_interval),
                 id="full_scan",
                 name="Full Market Scanner",
                 max_instances=1,
@@ -748,8 +767,8 @@ class ProTradeAIBot:
             logger.info(
                 f"📊 Monitoring {len(SYMBOLS)} symbols on {len(TIMEFRAMES)} timeframes"
             )
-            logger.info("⚡ Quick scans every 5 minutes")
-            logger.info("🔍 Full scans every 15 minutes (cron)")
+            logger.info(f"⚡ Quick scans every {quick_interval} minutes")
+            logger.info(f"🔍 Full scans every {full_interval} minutes")
             logger.info("🌙 Auto shutdown: 1-5 AM IST")
             logger.info(
                 f"💰 Risk per trade: {RISK_PER_TRADE*100:.1f}% of ${CAPITAL:,.2f}"
@@ -765,8 +784,8 @@ class ProTradeAIBot:
                 f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
                 f"✅ Bot is now running with enhanced tracking\n"
                 f"📊 Monitoring {len(SYMBOLS)} symbols\n"
-                f"⚡ Quick scans: Every 5 minutes\n"
-                f"🔍 Full scans: Every 15 minutes\n"
+                f"⚡ Quick scans: Every {quick_interval} minutes\n"
+                f"🔍 Full scans: Every {full_interval} minutes\n"
                 f"🌙 Auto shutdown: 1-5 AM IST\n"
                 f"💰 Capital: ${CAPITAL:,.2f}\n"
                 f"🎯 Risk per trade: {RISK_PER_TRADE*100:.1f}%\n"

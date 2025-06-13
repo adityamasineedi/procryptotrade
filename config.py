@@ -43,22 +43,22 @@ MAX_DAILY_TRADES = int(os.getenv('MAX_DAILY_TRADES', '8'))
 
 SCHEDULER_CONFIG = {
     # Scanning intervals
-    'quick_scan_interval': 3,       # Minutes - Quick scan every 3 minutes
-    'full_scan_interval': 10,       # Minutes - Full scan every 10 minutes (cron)
-    'health_check_interval': 10,    # Minutes - Health check every 10 minutes
-    'shutdown_check_interval': 5,   # Minutes - Check shutdown status every 5 minutes
-    'cleanup_interval': 60,         # Minutes - Cleanup every hour
+    'quick_scan_interval': 5,       # Minutes - Quick scan every 5 minutes
+    'full_scan_interval': 15,       # Minutes - Full scan every 15 minutes (cron)
+    'health_check_interval': 30,    # Minutes - Health check every 30 minutes
+    'shutdown_check_interval': 10,   # Minutes - Check shutdown status every 10 minutes
+    'cleanup_interval': 120,         # Minutes - Cleanup every 2 hours
     
     # Auto shutdown settings
-    'auto_shutdown_enabled': False,
-    'shutdown_start_hour': 1,       # 1 AM IST
-    'shutdown_end_hour': 5,         # 5 AM IST
+    'auto_shutdown_enabled': True,  # ENABLED for production
+    'shutdown_start_hour': 2,       # 2 AM IST
+    'shutdown_end_hour': 4,         # 4 AM IST (shorter window)
     'shutdown_timezone': 'Asia/Kolkata',  # IST
     
     # Maintenance settings
     'max_log_size_mb': 10,
-    'max_signal_history_days': 7,
-    'backup_frequency_hours': 6,
+    'max_signal_history_days': 14,  # Keep 2 weeks
+    'backup_frequency_hours': 12,   # Backup every 12 hours
 }
 
 # ============================================================================
@@ -108,6 +108,63 @@ TELEGRAM_CONFIG = {
     'send_error_alerts': True,
     'send_daily_summary': True,
     'send_health_reports': True,
+}
+
+# DISABLE emergency mode for production
+EMERGENCY_MODE = {
+    'enabled': False,           # DISABLED for production
+    'min_confidence': 25,
+    'max_daily_signals': 25,
+    'scan_interval_minutes': 5,
+    'disable_cooldowns': False,
+    'relax_validation': False,
+    'force_signals': False,     # DISABLED for production
+}
+
+# PRODUCTION-QUALITY CONFIDENCE THRESHOLDS
+CONFIDENCE_THRESHOLDS = {
+    'MIN_SIGNAL': 45,               # Higher quality (was 15 in testing)
+    'HIGH_CONFIDENCE': 65,          # Good confidence level
+    'MAX_CONFIDENCE': 90,           # Keep same
+    'RANGE_TRADING_MIN': 40,        # Quality sideways signals
+    'TREND_TRADING_MIN': 50,        # Quality trend signals
+    'EMERGENCY_MODE': 25,           # Only for emergencies
+}
+
+# MARKET REGIME DETECTION (Enhanced for Bull/Bear/Sideways)
+MARKET_REGIME_CONFIG = {
+    'sideways_threshold': 0.25,     # Price movement ratio for sideways
+    'trending_threshold': 0.65,     # Price movement ratio for trending
+    'bb_squeeze_threshold': 0.05,   # Bollinger Band squeeze indicator
+    'min_range_size_pct': 2.5,      # Minimum range size to trade
+    'regime_lookbook': 20,          # Candles to analyze
+    'volatility_periods': 14,       # ATR periods for volatility
+    'trend_strength_periods': 10,   # EMA difference periods
+}
+
+# ENHANCED MARKET CONDITIONS DETECTION
+MARKET_CONDITIONS = {
+    'low_volatility_threshold': 0.025,   # 2.5% volatility threshold
+    'high_volatility_threshold': 0.08,   # 8% volatility threshold
+    'confidence_adjustment': 0.9,        # 10% reduction in low vol
+    'min_signals_per_day': 3,            # Minimum expected signals
+    'max_signals_per_day': 12,           # Maximum signals per day
+    'cooldown_reduction_factor': 0.7,    # Moderate cooldown reduction
+    
+    # Market regime specific settings
+    'bull_market_threshold': 0.7,        # Strong uptrend
+    'bear_market_threshold': -0.7,       # Strong downtrend
+    'sideways_market_range': 0.3,        # Range-bound market
+}
+
+# QUALITY SIGNAL VALIDATION
+SIGNAL_QUALITY_CONFIG = {
+    'min_volume_ratio': 0.6,        # Require decent volume
+    'max_volatility': 0.12,         # Avoid extremely volatile periods
+    'rsi_overbought': 78,           # RSI overbought level
+    'rsi_oversold': 22,             # RSI oversold level
+    'min_atr_movement': 0.5,        # Minimum ATR for valid signals
+    'trend_confirmation_periods': 3, # Periods for trend confirmation
 }
 
 # ============================================================================
@@ -170,45 +227,6 @@ INDICATOR_PARAMS = {
 }
 
 # ============================================================================
-# CONFIDENCE AND SIGNAL THRESHOLDS (EMERGENCY LOW VOLATILITY SETTINGS)
-# ============================================================================
-
-CONFIDENCE_THRESHOLDS = {
-    'MIN_SIGNAL': 50,               # Lowered for sideways markets
-    'HIGH_CONFIDENCE': 70,          # Reduced from 75
-    'MAX_CONFIDENCE': 90,           # Keep at 90
-    'RANGE_TRADING_MIN': 55,        # Specific for range trading
-    'TREND_TRADING_MIN': 60,        # Higher requirement for trend trading
-}
-
-# ============================================================================
-# Market condition adaptation settings
-# ============================================================================
-
-MARKET_CONDITIONS = {
-    'low_volatility_threshold': 0.03,  # 3% volatility threshold
-    'confidence_adjustment': 0.85,     # 15% reduction in low volatility
-    'min_signals_per_day': 2,          # Minimum expected signals
-    'max_signals_per_day': 15,         # Maximum signals
-    'cooldown_reduction_factor': 0.5,  # Reduce cooldowns in low volatility
-}
-
-def get_confidence_grade(confidence: float) -> str:
-    """Get confidence grade letter"""
-    if confidence >= 90:
-        return 'A+'
-    elif confidence >= 85:
-        return 'A'
-    elif confidence >= 80:
-        return 'B+'
-    elif confidence >= 75:
-        return 'B'
-    elif confidence >= 70:
-        return 'C'
-    else:
-        return 'D'
-
-# ============================================================================
 # INCREASE TRADING FREQUENCY
 # ============================================================================
 
@@ -222,9 +240,14 @@ RISK_PER_TRADE = 0.015  # Slightly lower risk per trade (1.5% instead of 2%)
 DEFAULT_LEVERAGE_MODE = 'moderate'  # or 'aggressive' for higher leverage
 
 LEVERAGE_CONFIG = {
-    'conservative': {'min': 2, 'max': 4},   # Increased
-    'moderate': {'min': 3, 'max': 7},       # Increased  
-    'aggressive': {'min': 5, 'max': 12}     # Increased
+    'conservative': {'min': 2, 'max': 3},   # Low risk
+    'moderate': {'min': 2, 'max': 4},       # Balanced (default)
+    'aggressive': {'min': 3, 'max': 6},     # Higher risk
+    
+    # Market condition adjustments
+    'high_volatility_max': 3,       # Max leverage in high volatility
+    'sideways_market_max': 4,       # Max leverage in sideways markets
+    'trending_market_max': 6,       # Max leverage in trending markets
 }
 
 def get_leverage_range(mode: str = None) -> dict:
@@ -324,11 +347,13 @@ SIDEWAYS_ALERT_CONFIG = {
 
 # Market regime detection settings
 MARKET_REGIME_CONFIG = {
-    'sideways_threshold': 0.3,      # Price movement ratio for sideways detection
-    'trending_threshold': 0.7,      # Price movement ratio for trending detection
-    'bb_squeeze_threshold': 0.04,   # Bollinger Band squeeze indicator
-    'min_range_size_pct': 2.0,      # Minimum range size to trade (2%)
-    'regime_lookback': 20,          # Candles to analyze for regime detection
+    'sideways_threshold': 0.25,     # Price movement ratio for sideways
+    'trending_threshold': 0.65,     # Price movement ratio for trending
+    'bb_squeeze_threshold': 0.05,   # Bollinger Band squeeze indicator
+    'min_range_size_pct': 2.5,      # Minimum range size to trade
+    'regime_lookbook': 20,          # Candles to analyze
+    'volatility_periods': 14,       # ATR periods for volatility
+    'trend_strength_periods': 10,   # EMA difference periods
 }
 
 # Range trading specific settings
@@ -356,6 +381,25 @@ STRATEGY_CONFIDENCE = {
     'mean_reversion_min': 50,       # Even lower for mean reversion
     'sideways_bonus': 5,            # Extra confidence points in sideways markets
 }
+
+def get_confidence_grade(confidence: float) -> str:
+    """Get confidence grade letter"""
+    if confidence >= 90:
+        return 'A+'
+    elif confidence >= 85:
+        return 'A'
+    elif confidence >= 80:
+        return 'B+'
+    elif confidence >= 75:
+        return 'B'
+    elif confidence >= 70:
+        return 'C+'
+    elif confidence >= 60:
+        return 'C'
+    elif confidence >= 50:
+        return 'D+'
+    else:
+        return 'D'
 
 # ============================================================================
 # VALIDATION FUNCTIONS
