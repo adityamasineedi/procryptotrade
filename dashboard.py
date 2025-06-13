@@ -1134,4 +1134,8 @@ def main():
     dashboard.run()
 
 if __name__ == "__main__":
-    main()
+    # For deployment, run the dashboard directly
+    import os
+    dashboard = EnhancedDashboard()
+    port = int(os.environ.get('PORT', 5000))
+    dashboard.run(host='0.0.0.0', port=port)

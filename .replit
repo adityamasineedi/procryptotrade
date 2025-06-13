@@ -1,0 +1,13 @@
+modules = ["python-3.11"]
+
+[nix]
+packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "pkg-config", "rustc", "xsimd"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[deployment]
+run = "python main.py"
+deploymentTarget = "gce"
+ignoredPaths = [".venv", "__pycache__", ".pytest_cache"]
