@@ -14,6 +14,8 @@ import threading
 import json
 from pathlib import Path
 import pytz
+import gc
+import psutil
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -51,6 +53,114 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger(__name__)
 
+class RestartLoopPrevention:
+    """🔧 NEW: Prevents restart loops and duplicate notifications"""
+    
+    def __init__(self):
+        self.state_file = Path('data/restart_state.json')
+        self.data_dir = Path('data')
+        self.data_dir.mkdir(exist_ok=True)
+        
+        self.max_restarts_per_hour = 3
+        self.notification_cooldown_minutes = 30
+        
+        self.load_state()
+    
+    def load_state(self):
+        """Load restart tracking state"""
+        try:
+            if self.state_file.exists():
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    self.restart_history = data.get('restart_history', [])
+                    self.last_notification = data.get('last_notification')
+                    self.startup_count_today = data.get('startup_count_today', 0)
+                    self.last_date = data.get('last_date')
+            else:
+                self.restart_history = []
+                self.last_notification = None
+                self.startup_count_today = 0
+                self.last_date = None
+        except Exception as e:
+            logger.error(f"Error loading restart state: {e}")
+            self.restart_history = []
+            self.last_notification = None
+            self.startup_count_today = 0
+            self.last_date = None
+    
+    def save_state(self):
+        """Save restart tracking state"""
+        try:
+            data = {
+                'restart_history': self.restart_history[-10:],  # Keep only last 10
+                'last_notification': self.last_notification,
+                'startup_count_today': self.startup_count_today,
+                'last_date': self.last_date
+            }
+            with open(self.state_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving restart state: {e}")
+    
+    def should_send_startup_notification(self) -> bool:
+        """🔧 FIXED: Determine if startup notification should be sent"""
+        try:
+            now = datetime.now()
+            today = now.strftime('%Y-%m-%d')
+            current_time = now.isoformat()
+            
+            # Reset daily counter if new day
+            if self.last_date != today:
+                self.startup_count_today = 0
+                self.last_date = today
+                self.save_state()
+            
+            # Clean old restart history (only keep last hour)
+            hour_ago = now - timedelta(hours=1)
+            self.restart_history = [
+                r for r in self.restart_history 
+                if datetime.fromisoformat(r) > hour_ago
+            ]
+            
+            # Add current restart
+            self.restart_history.append(current_time)
+            
+            # Check if too many restarts
+            if len(self.restart_history) > self.max_restarts_per_hour:
+                logger.warning(f"🚨 TOO MANY RESTARTS: {len(self.restart_history)} in last hour")
+                # Only send notification once about restart loop
+                if self.startup_count_today == 0:
+                    self.startup_count_today = 1
+                    self.save_state()
+                    return True
+                return False
+            
+            # Check notification cooldown
+            if self.last_notification:
+                last_notif_time = datetime.fromisoformat(self.last_notification)
+                if now - last_notif_time < timedelta(minutes=self.notification_cooldown_minutes):
+                    logger.info(f"⏳ Startup notification on cooldown")
+                    return False
+            
+            # Check daily limit
+            if self.startup_count_today >= 5:  # Max 5 notifications per day
+                logger.info(f"📵 Daily notification limit reached: {self.startup_count_today}")
+                return False
+            
+            # All checks passed
+            self.last_notification = current_time
+            self.startup_count_today += 1
+            self.save_state()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking startup notification: {e}")
+            return False
+    
+    def is_restart_loop(self) -> bool:
+        """Check if we're in a restart loop"""
+        return len(self.restart_history) > self.max_restarts_per_hour
+
 class SimplePerformanceTracker:
     """Simple performance tracking for compatibility with existing code"""
 
@@ -75,8 +185,12 @@ class SimplePerformanceTracker:
             }
 
             self.signals_sent.append(signal_record)
+            
+            # Limit memory usage
+            if len(self.signals_sent) > 200:
+                self.signals_sent = self.signals_sent[-150:]
+            
             self.save_data()
-
             logger.info(f"📊 Tracked signal: {signal['symbol']} {signal['signal_type']}")
 
         except Exception as e:
@@ -145,7 +259,7 @@ class SimplePerformanceTracker:
         """Save tracking data"""
         try:
             data = {
-                "signals_sent": self.signals_sent[-500:],
+                "signals_sent": self.signals_sent[-200:],  # Limit size
                 "last_updated": datetime.now().isoformat(),
             }
 
@@ -185,11 +299,8 @@ class ProTradeAIBot:
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
 
-        # 🔧 FIX: Simplified notification state (STOP RESTART LOOP)
-        self.notification_state_file = self.data_dir / "simple_state.json"
-        self.last_startup_today = None
-        self.startup_count_today = 0
-        self.load_simple_state()
+        # 🔧 NEW: Restart loop prevention
+        self.restart_prevention = RestartLoopPrevention()
 
         self.emergency_mode = EMERGENCY_MODE.get('enabled', False)
         self.scan_count = 0
@@ -212,47 +323,6 @@ class ProTradeAIBot:
 
         if self.emergency_mode:
             logger.warning("🚨 EMERGENCY MODE ACTIVE - Aggressive scanning enabled")
-
-    def load_simple_state(self):
-        """🔧 SIMPLIFIED: Load basic state to prevent spam"""
-        try:
-            if self.notification_state_file.exists():
-                with open(self.notification_state_file, 'r') as f:
-                    state = json.load(f)
-                    self.last_startup_today = state.get('last_startup_today')
-                    self.startup_count_today = state.get('startup_count_today', 0)
-            else:
-                self.last_startup_today = None
-                self.startup_count_today = 0
-        except Exception as e:
-            logger.error(f"Error loading state: {e}")
-            self.last_startup_today = None
-            self.startup_count_today = 0
-
-    def save_simple_state(self):
-        """🔧 SIMPLIFIED: Save basic state"""
-        try:
-            state = {
-                'last_startup_today': self.last_startup_today,
-                'startup_count_today': self.startup_count_today
-            }
-            with open(self.notification_state_file, 'w') as f:
-                json.dump(state, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving state: {e}")
-
-    def should_send_startup_notification(self) -> bool:
-        """🔧 SIMPLIFIED: Only send startup notification once per day"""
-        try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            
-            # Only send ONE notification per day
-            if self.last_startup_today == today:
-                return False  # Already sent today
-            
-            return True
-        except Exception:
-            return True
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -354,7 +424,7 @@ class ProTradeAIBot:
             return 0.05
 
     def quick_market_scan(self):
-        """🔧 ENHANCED: Quick scan with better logging"""
+        """🔧 ENHANCED: Quick scan with better logging and error handling"""
         try:
             if self.is_shutdown_period:
                 return
@@ -380,7 +450,7 @@ class ProTradeAIBot:
             for symbol in scan_symbols:
                 for timeframe in scan_timeframes:
                     try:
-                        signal = strategy_ai.predict_signal(symbol, timeframe)
+                        signal = strategy_ai.predict_signal(symbol, timeframe, bypass_cooldown=True)
                         if signal:
                             signals.append(signal)
                             logger.info(
@@ -388,6 +458,7 @@ class ProTradeAIBot:
                             )
                     except Exception as e:
                         logger.error(f"Error scanning {symbol} {timeframe}: {e}")
+                        continue
 
             # Process signals
             if signals:
@@ -474,20 +545,43 @@ class ProTradeAIBot:
             logger.error(f"Error processing signal {signal.get('symbol', 'Unknown')}: {e}")
 
     def enhanced_health_check(self):
-        """🔧 SIMPLIFIED: Basic health check without complex monitoring"""
+        """🔧 SIMPLIFIED: Basic health check with memory monitoring"""
         try:
-            # Simple memory check (optional)
+            # Memory check
             try:
-                import psutil
                 memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
-                if memory_mb > 500:  # 500MB limit
+                if memory_mb > 400:  # 400MB limit for Replit
                     logger.warning(f"High memory usage: {memory_mb:.1f}MB")
+                    # Force garbage collection
+                    gc.collect()
+                    
+                    # Clear old data if memory still high
+                    if psutil.Process().memory_info().rss / 1024 / 1024 > 400:
+                        logger.warning("Clearing old signal data to reduce memory")
+                        self.signals_today = self.signals_today[-50:]  # Keep only recent
+                        self.tracker.signals_sent = self.tracker.signals_sent[-100:]
+                        gc.collect()
+                        
             except ImportError:
                 pass  # Skip if psutil not available
 
-            # Log health status occasionally
-            if self.scan_count % 240 == 0:  # Every 4 hours
-                logger.info(f"Health check: {self.scan_count} scans completed, system running")
+            # Restart loop check
+            if self.restart_prevention.is_restart_loop():
+                logger.error("🚨 RESTART LOOP DETECTED - Sending alert")
+                telegram_notifier.send_message(
+                    "🚨 <b>RESTART LOOP DETECTED</b>\n\n"
+                    "Bot is restarting too frequently.\n"
+                    "Please check logs for errors.\n\n"
+                    "Common causes:\n"
+                    "• Memory limit exceeded\n"
+                    "• Configuration errors\n"
+                    "• API rate limiting\n"
+                    "• Telegram connection issues"
+                )
+
+            # Periodic health log
+            if self.scan_count % 120 == 0:  # Every 2 hours
+                logger.info(f"Health: {self.scan_count} scans, memory: {psutil.Process().memory_info().rss / 1024 / 1024:.1f}MB")
 
         except Exception as e:
             logger.error(f"Error in health check: {e}")
@@ -506,7 +600,8 @@ class ProTradeAIBot:
             signal_data["timestamp"] = signal["timestamp"].isoformat()
             signals.append(signal_data)
 
-            signals = signals[-1000:]
+            # Limit file size
+            signals = signals[-500:]
 
             with open(signals_file, "w") as f:
                 json.dump(signals, f, indent=2)
@@ -547,6 +642,9 @@ class ProTradeAIBot:
             self.signals_today = [
                 s for s in self.signals_today if s["timestamp"] > cutoff_date
             ]
+
+            # Force garbage collection
+            gc.collect()
 
             log_file = Path(LOGGING_CONFIG["log_file"])
             if (log_file.exists() and 
@@ -589,12 +687,22 @@ class ProTradeAIBot:
             "last_health_check": self.last_health_check.isoformat(),
             "daily_stats": self.daily_stats,
             "scheduler_jobs": len(self.scheduler.get_jobs()),
+            "restart_prevention": {
+                "restart_count": len(self.restart_prevention.restart_history),
+                "is_restart_loop": self.restart_prevention.is_restart_loop(),
+                "startup_count_today": self.restart_prevention.startup_count_today
+            }
         }
 
     def start(self):
-        """🔧 FIXED: Start bot with SINGLE startup notification per day"""
+        """🔧 COMPLETELY FIXED: Start bot with proper restart loop prevention"""
         try:
             logger.info("Starting ProTradeAI Pro+ Bot...")
+
+            # Check if we're in a restart loop
+            if self.restart_prevention.is_restart_loop():
+                logger.error("🚨 RESTART LOOP DETECTED - Delaying startup")
+                time.sleep(30)  # Wait 30 seconds before continuing
 
             # Validate configuration
             if not self.validate_configuration():
@@ -631,7 +739,7 @@ class ProTradeAIBot:
             # Shutdown check
             self.scheduler.add_job(
                 func=self.check_shutdown_status,
-                trigger=IntervalTrigger(minutes=20),  # Less frequent
+                trigger=IntervalTrigger(minutes=30),  # Less frequent
                 id="shutdown_check",
                 name="Shutdown Status Check",
                 max_instances=1,
@@ -648,10 +756,10 @@ class ProTradeAIBot:
                 replace_existing=True,
             )
 
-            # Cleanup (every 4 hours)
+            # Cleanup (every 6 hours)
             self.scheduler.add_job(
                 func=self.cleanup_old_data,
-                trigger=IntervalTrigger(hours=4),
+                trigger=IntervalTrigger(hours=6),
                 id="cleanup",
                 name="Data Cleanup",
                 max_instances=1,
@@ -672,7 +780,7 @@ class ProTradeAIBot:
             self.scheduler.start()
             self.is_running = True
 
-            # Enable Telegram commands
+            # Enable Telegram commands (with error handling)
             try:
                 from notifier import enable_simple_commands
                 enable_simple_commands(strategy_ai)
@@ -685,15 +793,15 @@ class ProTradeAIBot:
 
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
 
-            # 🔧 FIXED: Only ONE startup notification per day
-            if self.should_send_startup_notification():
-                today = datetime.now().strftime('%Y-%m-%d')
-                self.last_startup_today = today
-                self.startup_count_today += 1
-                self.save_simple_state()
-
+            # 🔧 FIXED: Only send notification if needed
+            if self.restart_prevention.should_send_startup_notification():
                 today_stats = self.tracker.get_today_stats()
                 current_status = "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"
+
+                # Check for restart loop warning
+                restart_warning = ""
+                if self.restart_prevention.is_restart_loop():
+                    restart_warning = "\n⚠️ <b>Restart loop detected</b> - monitoring stability"
 
                 telegram_notifier.send_message(
                     f"🚀 <b>ProTradeAI Pro+ Started</b>\n\n"
@@ -703,9 +811,11 @@ class ProTradeAIBot:
                     f"🔍 Full scans: Every {full_interval} min\n"
                     f"💰 Capital: ${CAPITAL:,.2f}\n"
                     f"🎯 Risk: {RISK_PER_TRADE*100:.1f}% per trade\n"
-                    f"📈 Status: {current_status}\n\n"
+                    f"📈 Status: {current_status}{restart_warning}\n\n"
                     f"<i>Ready to generate signals! 🚀</i>"
                 )
+            else:
+                logger.info("🔕 Startup notification skipped (cooldown/limit)")
 
             return True
 
@@ -747,7 +857,7 @@ class ProTradeAIBot:
             logger.error(f"Error stopping bot: {e}")
 
     def run_forever(self):
-        """Run the bot indefinitely"""
+        """Run the bot indefinitely with restart loop protection"""
         if not self.start():
             return
 
@@ -764,8 +874,8 @@ class ProTradeAIBot:
 
 def main():
     """Main entry point"""
-    print("🤖 ProTradeAI Pro+ Trading Bot v2.0")
-    print("=" * 50)
+    print("🤖 ProTradeAI Pro+ Trading Bot v2.0 (RESTART LOOP FIXED)")
+    print("=" * 60)
 
     bot = ProTradeAIBot()
 
@@ -796,6 +906,8 @@ def main():
             print(f"   Signals Today: {status['signals_today']}")
             print(f"   Signals This Week: {status['signals_this_week']}")
             print(f"   Avg Confidence: {status['avg_confidence_today']:.1f}%")
+            print(f"   Restart Count: {status['restart_prevention']['restart_count']}")
+            print(f"   Restart Loop: {status['restart_prevention']['is_restart_loop']}")
 
         elif command == "scan":
             print("🔍 Running manual full scan...")
