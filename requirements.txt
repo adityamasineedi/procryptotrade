@@ -10,7 +10,7 @@ ta==0.10.2
 
 # Web Framework & API (LIGHTWEIGHT)
 flask==2.3.3
-requests==2.31.0
+requests==2.32.4
 werkzeug==2.3.7
 
 # Scheduling & Background Tasks (STABLE)
@@ -44,3 +44,4 @@ colorlog==6.7.0
 # - Focused on stability over features
 # - All versions are tested and stable for Python 3.11
 # - Total install size reduced by ~70% for faster deployment
+urllib3>=2.2.2 # not directly required, pinned by Snyk to avoid a vulnerability
