@@ -695,7 +695,7 @@ class ProTradeAIBot:
         }
 
     def start(self):
-        """🔧 COMPLETELY FIXED: Start bot with proper restart loop prevention"""
+        """🔧 COMPLETELY FIXED: Start bot with command initialization fix"""
         try:
             logger.info("Starting ProTradeAI Pro+ Bot...")
 
@@ -739,7 +739,7 @@ class ProTradeAIBot:
             # Shutdown check
             self.scheduler.add_job(
                 func=self.check_shutdown_status,
-                trigger=IntervalTrigger(minutes=30),  # Less frequent
+                trigger=IntervalTrigger(minutes=30),
                 id="shutdown_check",
                 name="Shutdown Status Check",
                 max_instances=1,
@@ -749,7 +749,7 @@ class ProTradeAIBot:
             # Health check
             self.scheduler.add_job(
                 func=self.enhanced_health_check,
-                trigger=IntervalTrigger(minutes=60),  # Much less frequent
+                trigger=IntervalTrigger(minutes=60),
                 id="health_check",
                 name="Health Check",
                 max_instances=1,
@@ -780,20 +780,29 @@ class ProTradeAIBot:
             self.scheduler.start()
             self.is_running = True
 
-            # Enable Telegram commands (with error handling)
-            try:
-                from notifier import enable_simple_commands
-                enable_simple_commands(strategy_ai)
-                logger.info("✅ Commands activated")
-            except Exception as e:
-                logger.warning(f"Commands not enabled: {e}")
+            # 🔧 FIXED: Only enable commands ONCE per bot instance
+            if not hasattr(self, '_commands_initialized') or not self._commands_initialized:
+                try:
+                    from notifier import enable_simple_commands
+                    success = enable_simple_commands(strategy_ai)
+                    if success:
+                        self._commands_initialized = True
+                        logger.info("✅ Commands activated successfully")
+                    else:
+                        self._commands_initialized = False
+                        logger.warning("❌ Commands not enabled")
+                except Exception as e:
+                    self._commands_initialized = False
+                    logger.warning(f"Commands not enabled: {e}")
+            else:
+                logger.info("ℹ️ Commands already initialized, skipping")
 
             # Check initial shutdown status
             self.check_shutdown_status()
 
             logger.info("✅ ProTradeAI Pro+ Bot started successfully!")
 
-            # 🔧 FIXED: Only send notification if needed
+            # 🔧 FIX: Only send startup notification if needed
             if self.restart_prevention.should_send_startup_notification():
                 today_stats = self.tracker.get_today_stats()
                 current_status = "🌙 Shutdown Period" if self.is_shutdown_period else "🚀 Active Trading"

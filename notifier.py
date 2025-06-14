@@ -8,6 +8,7 @@ KEY FIXES:
 - Reduced API call frequency
 - More stable threading
 - Better memory management
+- FIXED: Duplicate command activation messages
 """
 
 import requests
@@ -21,6 +22,11 @@ import threading
 from config import TELEGRAM_CONFIG, CAPITAL, RISK_PER_TRADE, MAX_DAILY_TRADES, SIDEWAYS_ALERT_CONFIG
 
 logger = logging.getLogger(__name__)
+
+# 🔧 NEW: Global variables to prevent duplicate command activation
+_commands_enabled = False
+_commands_lock = threading.Lock()
+_last_enable_time = 0
 
 class TelegramNotifier:
     def __init__(self):
@@ -490,8 +496,9 @@ class StableTelegramCommandHandler:
             self.last_update_id = 0
     
     def start_listening(self):
-        """Start command listener thread with error recovery"""
+        """🔧 FIXED: Start command listener with duplicate prevention"""
         if self.is_listening:
+            logger.info("⚠️ Command listener already running, skipping start")
             return
         
         self.is_listening = True
@@ -942,56 +949,85 @@ class StableTelegramCommandHandler:
 command_handler = None
 
 def enable_simple_commands(strategy_ai_instance):
-    """🔧 STABILITY FOCUSED: Enable Telegram commands with crash prevention"""
-    global command_handler
-    try:
-        if not TELEGRAM_CONFIG['bot_token'] or not TELEGRAM_CONFIG['chat_id']:
-            logger.error("❌ Telegram credentials missing")
-            return False
+    """🔧 COMPLETELY FIXED: Enable Telegram commands with duplicate prevention"""
+    global command_handler, _commands_enabled, _last_enable_time
+    
+    with _commands_lock:
+        try:
+            # Check if already enabled recently (within last 60 seconds)
+            current_time = time.time()
+            if _commands_enabled and (current_time - _last_enable_time) < 60:
+                logger.info("ℹ️ Commands recently enabled, skipping duplicate call")
+                return True
             
-        command_handler = StableTelegramCommandHandler(
-            TELEGRAM_CONFIG['bot_token'],
-            TELEGRAM_CONFIG['chat_id'],
-            strategy_ai_instance
-        )
-        command_handler.start_listening()
-        logger.info("✅ STABLE command handler started successfully")
-        
-        # Send success message
-        telegram_notifier.send_message(
-            "🤖 <b>Commands Activated! (STABILITY FOCUSED)</b>\n\n"
-            "✅ Comprehensive error handling\n"
-            "✅ Crash prevention system\n"
-            "✅ Progressive error recovery\n"
-            "✅ Memory management active\n"
-            "✅ Restart loop protection\n\n"
-            "📱 Type <code>/help</code> to see commands\n"
-            "🛡️ System designed to prevent crashes!\n\n"
-            "<i>Commands should work reliably now</i>"
-        )
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Error enabling commands: {e}")
-        return False
+            if not TELEGRAM_CONFIG['bot_token'] or not TELEGRAM_CONFIG['chat_id']:
+                logger.error("❌ Telegram credentials missing")
+                return False
+            
+            # Check if command handler exists and is active
+            if (command_handler is not None and 
+                hasattr(command_handler, 'is_listening') and 
+                command_handler.is_listening):
+                logger.info("ℹ️ Commands already active, skipping initialization")
+                return True
+            
+            # Stop existing handler if it exists but not listening
+            if command_handler is not None:
+                try:
+                    command_handler.stop_listening()
+                except:
+                    pass
+                command_handler = None
+            
+            # Create new handler
+            command_handler = StableTelegramCommandHandler(
+                TELEGRAM_CONFIG['bot_token'],
+                TELEGRAM_CONFIG['chat_id'],
+                strategy_ai_instance
+            )
+            command_handler.start_listening()
+            
+            # Mark as enabled
+            _commands_enabled = True
+            _last_enable_time = current_time
+            
+            logger.info("✅ Command handler started successfully")
+            
+            # Send activation message only once
+            telegram_notifier.send_message(
+                "🤖 <b>Commands Ready!</b>\n\n"
+                "✅ Command system initialized\n"
+                "📱 Type <code>/help</code> for commands\n\n"
+                f"<i>Activated at {datetime.now().strftime('%H:%M:%S')}</i>"
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error enabling commands: {e}")
+            _commands_enabled = False
+            return False
 
 def disable_simple_commands():
     """Disable Telegram commands"""
-    global command_handler
-    try:
-        if command_handler:
-            command_handler.stop_listening()
-            command_handler = None
-            logger.info("🛑 Telegram commands disabled")
+    global command_handler, _commands_enabled
+    
+    with _commands_lock:
+        try:
+            _commands_enabled = False
             
-            telegram_notifier.send_message(
-                "🛑 <b>Commands Disabled</b>\n\n"
-                "Command system has been deactivated."
-            )
+            if command_handler:
+                command_handler.stop_listening()
+                command_handler = None
+                logger.info("🛑 Telegram commands disabled")
+                
+                telegram_notifier.send_message(
+                    "🛑 <b>Commands Disabled</b>\n\n"
+                    "Command system deactivated."
+                )
+                
+            return True
             
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error disabling commands: {e}")
-        return False
+        except Exception as e:
+            logger.error(f"Error disabling commands: {e}")
+            return False
