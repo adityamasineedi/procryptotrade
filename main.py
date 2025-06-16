@@ -15,8 +15,14 @@ import json
 from pathlib import Path
 import pytz
 import gc
-import psutil
 
+# Handle psutil import gracefully
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
@@ -547,23 +553,24 @@ class ProTradeAIBot:
     def enhanced_health_check(self):
         """🔧 SIMPLIFIED: Basic health check with memory monitoring"""
         try:
-            # Memory check
-            try:
-                memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
-                if memory_mb > 400:  # 400MB limit for Replit
-                    logger.warning(f"High memory usage: {memory_mb:.1f}MB")
-                    # Force garbage collection
-                    gc.collect()
-                    
-                    # Clear old data if memory still high
-                    if psutil.Process().memory_info().rss / 1024 / 1024 > 400:
-                        logger.warning("Clearing old signal data to reduce memory")
-                        self.signals_today = self.signals_today[-50:]  # Keep only recent
-                        self.tracker.signals_sent = self.tracker.signals_sent[-100:]
+            # Memory check - only if psutil is available
+            if PSUTIL_AVAILABLE:
+                try:
+                    memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+                    if memory_mb > 400:  # 400MB limit for Replit
+                        logger.warning(f"High memory usage: {memory_mb:.1f}MB")
+                        # Force garbage collection
                         gc.collect()
                         
-            except ImportError:
-                pass  # Skip if psutil not available
+                        # Clear old data if memory still high
+                        if psutil.Process().memory_info().rss / 1024 / 1024 > 400:
+                            logger.warning("Clearing old signal data to reduce memory")
+                            self.signals_today = self.signals_today[-50:]  # Keep only recent
+                            self.tracker.signals_sent = self.tracker.signals_sent[-100:]
+                            gc.collect()
+                        
+                except Exception as e:
+                    logger.debug(f"Memory monitoring error: {e}")
 
             # Restart loop check
             if self.restart_prevention.is_restart_loop():
@@ -580,8 +587,12 @@ class ProTradeAIBot:
                 )
 
             # Periodic health log
-            if self.scan_count % 120 == 0:  # Every 2 hours
-                logger.info(f"Health: {self.scan_count} scans, memory: {psutil.Process().memory_info().rss / 1024 / 1024:.1f}MB")
+            if self.scan_count % 120 == 0 and PSUTIL_AVAILABLE:  # Every 2 hours
+                try:
+                    memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+                    logger.info(f"Health: {self.scan_count} scans, memory: {memory_mb:.1f}MB")
+                except:
+                    logger.info(f"Health: {self.scan_count} scans completed")
 
         except Exception as e:
             logger.error(f"Error in health check: {e}")
@@ -712,9 +723,9 @@ class ProTradeAIBot:
             # Setup scheduler
             logger.info("Setting up scheduler...")
 
-            # Production intervals
-            quick_interval = 5
-            full_interval = 15
+            # Production intervals from config
+            quick_interval = SCHEDULER_CONFIG['quick_scan_interval']
+            full_interval = SCHEDULER_CONFIG['full_scan_interval']
 
             # Quick market scan
             self.scheduler.add_job(
@@ -739,7 +750,7 @@ class ProTradeAIBot:
             # Shutdown check
             self.scheduler.add_job(
                 func=self.check_shutdown_status,
-                trigger=IntervalTrigger(minutes=30),
+                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['shutdown_check_interval']),
                 id="shutdown_check",
                 name="Shutdown Status Check",
                 max_instances=1,
@@ -749,17 +760,17 @@ class ProTradeAIBot:
             # Health check
             self.scheduler.add_job(
                 func=self.enhanced_health_check,
-                trigger=IntervalTrigger(minutes=60),
+                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['health_check_interval']),
                 id="health_check",
                 name="Health Check",
                 max_instances=1,
                 replace_existing=True,
             )
 
-            # Cleanup (every 6 hours)
+            # Cleanup
             self.scheduler.add_job(
                 func=self.cleanup_old_data,
-                trigger=IntervalTrigger(hours=6),
+                trigger=IntervalTrigger(minutes=SCHEDULER_CONFIG['cleanup_interval']),
                 id="cleanup",
                 name="Data Cleanup",
                 max_instances=1,

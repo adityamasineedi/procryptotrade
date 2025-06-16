@@ -63,9 +63,9 @@ CONFIDENCE_THRESHOLDS = {
 
 SCHEDULER_CONFIG = {
     # Scanning intervals
-    'quick_scan_interval': 5,       # Minutes - Quick scan every 5 minutes
-    'full_scan_interval': 15,       # Minutes - Full scan every 15 minutes
-    'health_check_interval': 60,    # Minutes - Health check every hour (reduced)
+    'quick_scan_interval': int(os.getenv('QUICK_SCAN_INTERVAL', '5')),       # Minutes
+    'full_scan_interval': int(os.getenv('FULL_SCAN_INTERVAL', '15')),        # Minutes
+    'health_check_interval': int(os.getenv('HEALTH_CHECK_INTERVAL', '60')),  # Minutes
     'shutdown_check_interval': 20,  # Minutes - Check shutdown every 20 minutes
     'cleanup_interval': 240,        # Minutes - Cleanup every 4 hours
     
@@ -116,10 +116,10 @@ TELEGRAM_CONFIG = {
     'rate_limit_window': 60,
     
     # Notification settings (simplified)
-    'send_startup_message': True,
-    'send_shutdown_messages': True,
-    'send_error_alerts': True,
-    'send_daily_summary': True,
+    'send_startup_message': os.getenv('SEND_STARTUP_NOTIFICATIONS', 'true').lower() == 'true',
+    'send_shutdown_messages': os.getenv('SEND_SHUTDOWN_NOTIFICATIONS', 'true').lower() == 'true',
+    'send_error_alerts': os.getenv('SEND_ERROR_ALERTS', 'true').lower() == 'true',
+    'send_daily_summary': os.getenv('SEND_DAILY_SUMMARY', 'true').lower() == 'true',
 }
 
 # ============================================================================
@@ -127,7 +127,7 @@ TELEGRAM_CONFIG = {
 # ============================================================================
 
 EMERGENCY_MODE = {
-    'enabled': False,               # DISABLED for production
+    'enabled': os.getenv('EMERGENCY_MODE', 'false').lower() == 'true',
     'min_confidence': 15,           # Ultra low for testing
     'max_daily_signals': 30,
     'scan_interval_minutes': 3,
@@ -169,7 +169,7 @@ SIGNAL_QUALITY_CONFIG = {
 MODEL_CONFIG = {
     'model_path': 'ai_model.pkl',
     'backup_path': 'models/backups/',
-    'retrain_frequency_days': 14,   # Increased from 7
+    'retrain_frequency_days': int(os.getenv('MODEL_RETRAIN_DAYS', '14')),
     'feature_window': 50,           # REDUCED from 100
     'validation_split': 0.2,
     'random_state': 42,
@@ -201,7 +201,7 @@ INDICATOR_PARAMS = {
 # LEVERAGE CONFIGURATION (SIMPLIFIED)
 # ============================================================================
 
-DEFAULT_LEVERAGE_MODE = 'moderate'
+DEFAULT_LEVERAGE_MODE = os.getenv('LEVERAGE_MODE', 'moderate')
 
 LEVERAGE_CONFIG = {
     'conservative': {'min': 2, 'max': 3},   # Low risk
@@ -245,7 +245,7 @@ DASHBOARD_CONFIG = {
 
 # Dashboard Authentication (OPTIONAL)
 DASHBOARD_AUTH = {
-    'enabled': False,               # DISABLED by default for simplicity
+    'enabled': os.getenv('DASHBOARD_AUTH_ENABLED', 'false').lower() == 'true',
     'username': os.getenv('DASHBOARD_USER', 'admin'),
     'password': os.getenv('DASHBOARD_PASS'),
     'session_timeout_hours': 24,
@@ -307,7 +307,7 @@ STRATEGY_CONFIDENCE = {
 # ============================================================================
 
 API_RATE_LIMITING = {
-    'enabled': True,
+    'enabled': os.getenv('RATE_LIMITING_ENABLED', 'true').lower() == 'true',
     'calls_per_minute': 800,        # REDUCED from 1000
     'calls_per_second': 8,          # REDUCED from 10
     'weight_per_minute': 4000,      # REDUCED from 5000
@@ -321,8 +321,8 @@ PRODUCTION_LIMITS = {
     'consecutive_loss_limit': 7,    # INCREASED from 5
     'max_drawdown_alert_pct': 20,   # INCREASED from 15
     'position_timeout_hours': 72,   # INCREASED from 48
-    'max_memory_mb': 1000,          # INCREASED from 500
-    'max_cpu_percent': 90,          # INCREASED from 80
+    'max_memory_mb': int(os.getenv('MAX_MEMORY_MB', '1000')),
+    'max_cpu_percent': int(os.getenv('MAX_CPU_PERCENT', '90')),
 }
 
 ERROR_HANDLING = {
